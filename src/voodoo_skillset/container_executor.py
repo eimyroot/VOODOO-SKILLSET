@@ -91,7 +91,7 @@ class DockerSandboxExecutor:
             "--hostname=voodoo-sandbox",
             "--env=HOME=/tmp",
             "--env=PYTHONDONTWRITEBYTECODE=1",
-            f"--mount=type=bind,src={staged},dst=/workspace,rw",
+            f"--mount=type=bind,src={staged},dst=/workspace",
             f"--workdir={workdir}",
             self.image,
             *argv,
