@@ -1,11 +1,12 @@
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from voodoo_skillset.execution import ExecutionEnvelope
-from voodoo_skillset.fleet import DurableFleetStore, workspace_manifest_digest
-from voodoo_skillset.fleet_worker import FleetWorker, IndependentFleetVerifier
+from voodoo_skillset.fleet import DurableFleetStore, Lease, workspace_manifest_digest
+from voodoo_skillset.fleet_worker import ExecutionLeaseHeartbeat, FleetWorker, IndependentFleetVerifier
 
 SECRET = "fleet-worker-secret-0123456789abcdef"
 
@@ -37,6 +38,18 @@ class FailingAdapter:
         raise RuntimeError("synthetic worker failure")
 
 
+class HeartbeatStore:
+    def __init__(self, fail=False):
+        self.calls = 0
+        self.fail = fail
+
+    def heartbeat_execution(self, job_id, worker_id, token, lease_seconds):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("lost coordinator lease")
+        return int(time.time()) + lease_seconds
+
+
 class FleetWorkerTests(unittest.TestCase):
     def setup_job(self, root: Path, *, max_attempts=3):
         workspace_root = root / "workspaces"
@@ -64,6 +77,28 @@ class FleetWorkerTests(unittest.TestCase):
             max_attempts=max_attempts,
         )
         return store, workspace_root, job
+
+    def test_execution_heartbeat_renews_lease_until_stopped(self):
+        store = HeartbeatStore()
+        lease = Lease("JOB-1", "worker-a", "token", int(time.time()) + 15, {})
+        heartbeat = ExecutionLeaseHeartbeat(store, lease, "worker-a", 15)
+        heartbeat.interval = 0.01
+        heartbeat.start()
+        time.sleep(0.05)
+        heartbeat.stop()
+        self.assertGreaterEqual(store.calls, 2)
+        self.assertIsNone(heartbeat.error)
+
+    def test_execution_heartbeat_records_ownership_loss_fail_closed(self):
+        store = HeartbeatStore(fail=True)
+        lease = Lease("JOB-1", "worker-a", "token", int(time.time()) + 15, {})
+        heartbeat = ExecutionLeaseHeartbeat(store, lease, "worker-a", 15)
+        heartbeat.interval = 0.01
+        heartbeat.start()
+        time.sleep(0.03)
+        heartbeat.stop()
+        self.assertIsInstance(heartbeat.error, RuntimeError)
+        self.assertEqual(store.calls, 1)
 
     def test_worker_then_independent_verifier(self):
         with tempfile.TemporaryDirectory() as d:
