@@ -1,0 +1,13 @@
+[project]
+name = "voodoo-skillset"
+version = "0.2.0"
+description = "Governed orchestration control plane for AI capabilities"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+voodoo-skillset = "voodoo_skillset.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

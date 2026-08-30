@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"VOODOO Evidence Event","type":"object","required":["seq","timestamp","kind","subject","payload","prev_hash","event_hash"]}

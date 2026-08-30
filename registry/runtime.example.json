@@ -1,0 +1,5 @@
+{
+  "tools": ["web-search", "filesystem-write", "test-runner", "isolated-runner"],
+  "connectors": ["github"],
+  "standing_grants": []
+}

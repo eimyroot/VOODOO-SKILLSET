@@ -1,0 +1,27 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile
+        run: PYTHONPATH=src python -m compileall -q src tests
+      - name: Tests
+        run: PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: CLI plan smoke
+        run: |
+          PYTHONPATH=src python -m voodoo_skillset.cli plan "audit github repository security implement fixes test verify" --mode ALL --connector github --tool filesystem-write --tool test-runner --tool isolated-runner --tool web-search --out /tmp/plan.json --evidence /tmp/evidence.json
+          PYTHONPATH=src python -m voodoo_skillset.cli verify-plan /tmp/plan.json --require-verifier
+          PYTHONPATH=src python -m voodoo_skillset.cli verify-evidence /tmp/evidence.json

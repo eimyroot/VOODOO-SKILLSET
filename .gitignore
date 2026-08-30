@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+evidence/*.json
+!evidence/.gitkeep
+evidence/runs.jsonl
+*.tmp
+.DS_Store

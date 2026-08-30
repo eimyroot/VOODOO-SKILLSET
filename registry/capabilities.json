@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "capabilities": [
+    {"id":"reality-checker","kind":"skill","description":"Resolve current truth before action","intents":["audit","verify","general"],"tags":["reality","truth","preflight"],"confidence":0.95,"expected_impact":0.82,"always_in_modes":["ALL","REDTEAM"]},
+    {"id":"caser-sourcer","kind":"skill","description":"Source-of-truth, provenance and drift control","intents":["audit","verify","research","architecture"],"tags":["provenance","evidence","source truth"],"confidence":0.94,"expected_impact":0.86,"always_in_modes":["ALL","REDTEAM"]},
+    {"id":"caser-miner","kind":"skill","description":"Research intelligence and implementation candidates","intents":["research","architecture","audit"],"tags":["research","architecture intelligence","competitive"],"confidence":0.86,"expected_impact":0.72},
+    {"id":"architect","kind":"agent","description":"System architecture and contract design","intents":["architecture","implement"],"tags":["architecture","contracts","design"],"confidence":0.9,"expected_impact":0.82},
+    {"id":"repo-auditor","kind":"agent","description":"Repository structure and code audit","intents":["audit","github","implement"],"tags":["repo","audit","code"],"requires_connectors":["github"],"confidence":0.92,"expected_impact":0.8},
+    {"id":"security-reviewer","kind":"agent","description":"Threat model and security review","intents":["security","audit","implement"],"tags":["security","threat","fail closed"],"confidence":0.93,"expected_impact":0.88},
+    {"id":"implementer","kind":"agent","description":"Bounded implementation worker","intents":["implement","ux","architecture"],"tags":["implementation","code","frontend","backend"],"requires_tools":["filesystem-write"],"authority":"WRITE","risk":0.38,"confidence":0.9,"expected_impact":0.95,"always_in_modes":["ALL"]},
+    {"id":"test-engineer","kind":"agent","description":"Automated tests and build verification","intents":["test","verify","implement"],"tags":["tests","qa","build"],"requires_tools":["test-runner"],"authority":"COMPUTE","confidence":0.94,"expected_impact":0.92,"always_in_modes":["ALL","REDTEAM"]},
+    {"id":"devops-reviewer","kind":"agent","description":"CI/CD, release and observability review","intents":["deploy","observe","github","implement"],"tags":["ci","cd","release","observability"],"confidence":0.88,"expected_impact":0.76},
+    {"id":"ux-reviewer","kind":"agent","description":"Product UX and accessibility review","intents":["ux","implement"],"tags":["webdesign","ux","a11y","dashboard"],"confidence":0.88,"expected_impact":0.78},
+    {"id":"red-team","kind":"agent","description":"Adversarial review after implementation","intents":["security","verify"],"tags":["red team","adversarial","abuse"],"risk":0.12,"confidence":0.92,"expected_impact":0.84,"always_in_modes":["REDTEAM"]},
+    {"id":"evidence-curator","kind":"subagent","description":"Append-only evidence and receipt curation","intents":["verify","audit","general"],"tags":["evidence","receipt","ledger"],"confidence":0.93,"expected_impact":0.75,"always_in_modes":["ALL","REDTEAM"]},
+    {"id":"independent-verifier","kind":"verifier","description":"Independent outcome/plan verifier","intents":["verify","audit","test","implement","general"],"tags":["independent verification","outcome"],"confidence":0.98,"expected_impact":1.0,"always_in_modes":["PRO","ALL","REDTEAM"]},
+    {"id":"governed-terminal","kind":"plugin","description":"CASTER-MINAL-style classified terminal execution boundary","intents":["implement","test","deploy"],"tags":["terminal","governed","shell false"],"requires_tools":["isolated-runner"],"authority":"COMPUTE","risk":0.3,"confidence":0.94,"expected_impact":0.9},
+    {"id":"github-read-plugin","kind":"plugin","description":"Read-only GitHub connector","intents":["github","audit","verify"],"tags":["github","read"],"requires_connectors":["github"],"authority":"READ","confidence":0.96,"expected_impact":0.84},
+    {"id":"github-write-plugin","kind":"plugin","description":"Governed GitHub mutation connector","intents":["github","implement","deploy"],"tags":["github","write","push"],"requires_connectors":["github"],"authority":"REMOTE_WRITE","risk":0.75,"confidence":0.92,"expected_impact":0.9},
+    {"id":"web-search-tool","kind":"tool","description":"Fresh public web research","intents":["research","audit"],"tags":["web","research"],"requires_tools":["web-search"],"authority":"READ","confidence":0.9,"expected_impact":0.65}
+  ]
+}
