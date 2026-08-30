@@ -1,6 +1,6 @@
 [project]
 name = "voodoo-skillset"
-version = "0.5.0"
+version = "0.6.0"
 description = "Governed orchestration control plane for AI capabilities"
 requires-python = ">=3.12"
 dependencies = []
@@ -8,6 +8,8 @@ dependencies = []
 [project.scripts]
 voodoo-skillset = "voodoo_skillset.cli:main"
 voodoo-executor = "voodoo_skillset.executor_node:main"
+voodoo-fleet-worker = "voodoo_skillset.fleet_worker:worker_main"
+voodoo-fleet-verifier = "voodoo_skillset.fleet_worker:verifier_main"
 
 [build-system]
 requires = ["setuptools>=68"]
