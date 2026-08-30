@@ -18,60 +18,68 @@ jobs:
       PROD_ALIAS: https://voodoo-skillset-voodoo-caser.vercel.app
       DEPLOYMENT_URL: https://voodoo-skillset-554oi4xff-voodoo-caser.vercel.app
     steps:
-      - name: Independent production HTTP verification
+      - name: Diagnose production routing without following redirects
+        shell: bash
+        run: |
+          set -euo pipefail
+          for base in "$PROD_ALIAS" "$DEPLOYMENT_URL"; do
+            for path in /api/health /; do
+              echo "=== RAW $base$path ==="
+              rm -f /tmp/h /tmp/b
+              meta=$(curl -sS --connect-timeout 10 --max-time 20 -D /tmp/h -o /tmp/b \
+                -w '%{http_code}|%{url_effective}|%{redirect_url}' \
+                -H 'User-Agent: VOODOO-SKILLSET-independent-verifier/2.0' \
+                "$base$path" || true)
+              echo "meta=$meta"
+              echo "--- headers ---"
+              sed -n '1,40p' /tmp/h || true
+              echo "--- body prefix ---"
+              head -c 1200 /tmp/b || true
+              echo
+            done
+          done
+
+      - name: Follow redirects and verify canonical application
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os, sys, urllib.error, urllib.request
+          import json, os, sys, urllib.request
 
           expected = os.environ['EXPECTED_SHA']
           urls = [
               ('production_alias', os.environ['PROD_ALIAS']),
               ('deployment_url', os.environ['DEPLOYMENT_URL']),
           ]
-
           failures = []
           for label, base in urls:
               print(f'=== {label}: {base} ===')
-              try:
-                  req = urllib.request.Request(base + '/api/health', headers={'User-Agent': 'VOODOO-SKILLSET-independent-verifier/1.0'})
-                  with urllib.request.urlopen(req, timeout=20) as resp:
-                      body = resp.read().decode('utf-8', errors='replace')
-                      print('health_status=', resp.status)
-                      print('health_body=', body[:2000])
-                      if resp.status != 200:
-                          failures.append(f'{label}: health status {resp.status}')
-                          continue
-                      data = json.loads(body)
-                      if data.get('status') != 'ok':
-                          failures.append(f"{label}: status={data.get('status')!r}")
-                      if data.get('version') != '0.3.0':
-                          failures.append(f"{label}: version={data.get('version')!r}")
-                      if data.get('canonical_sha') != expected:
-                          failures.append(f"{label}: canonical_sha={data.get('canonical_sha')!r} expected={expected}")
-              except Exception as exc:
-                  failures.append(f'{label}: health request failed: {exc!r}')
-
-              try:
-                  req = urllib.request.Request(base + '/', headers={'User-Agent': 'VOODOO-SKILLSET-independent-verifier/1.0'})
-                  with urllib.request.urlopen(req, timeout=20) as resp:
-                      html = resp.read().decode('utf-8', errors='replace')
-                      print('root_status=', resp.status)
-                      print('root_prefix=', html[:400].replace('\n', ' '))
-                      if resp.status != 200:
-                          failures.append(f'{label}: root status {resp.status}')
-                      if 'VOODOO' not in html or 'SKILLSET' not in html:
-                          failures.append(f'{label}: Control Room identity missing')
-              except Exception as exc:
-                  failures.append(f'{label}: root request failed: {exc!r}')
-
+              for path in ('/api/health', '/'):
+                  try:
+                      req = urllib.request.Request(base + path, headers={'User-Agent':'VOODOO-SKILLSET-independent-verifier/2.0'})
+                      with urllib.request.urlopen(req, timeout=20) as resp:
+                          body = resp.read().decode('utf-8', errors='replace')
+                          print(path, 'status=', resp.status, 'final_url=', resp.geturl())
+                          print(path, 'content_type=', resp.headers.get('content-type'))
+                          print(path, 'prefix=', body[:500].replace('\n',' '))
+                          if path == '/api/health':
+                              try:
+                                  data = json.loads(body)
+                              except Exception as exc:
+                                  failures.append(f'{label}: health is not JSON; final_url={resp.geturl()} error={exc!r}')
+                                  continue
+                              if data.get('status') != 'ok': failures.append(f'{label}: status={data.get("status")!r}')
+                              if data.get('version') != '0.3.0': failures.append(f'{label}: version={data.get("version")!r}')
+                              if data.get('canonical_sha') != expected: failures.append(f'{label}: canonical_sha={data.get("canonical_sha")!r}')
+                          else:
+                              if 'VOODOO' not in body or 'SKILLSET' not in body:
+                                  failures.append(f'{label}: Control Room identity missing; final_url={resp.geturl()}')
+                  except Exception as exc:
+                      failures.append(f'{label}{path}: request failed: {exc!r}')
           if failures:
               print('=== VERDICT: FAIL ===')
-              for item in failures:
-                  print('-', item)
+              for item in failures: print('-', item)
               sys.exit(1)
-
           print('=== VERDICT: PASS ===')
           print('canonical_sha=', expected)
           PY
