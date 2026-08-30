@@ -1,0 +1,98 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from voodoo_skillset.execution import ExecutionEnvelope
+from voodoo_skillset.fleet import DurableFleetStore, workspace_manifest_digest
+from voodoo_skillset.fleet_worker import FleetWorker, IndependentFleetVerifier
+
+SECRET = "fleet-worker-secret-0123456789abcdef"
+
+
+class FakeAdapter:
+    backend_name = "fake-isolated-v1"
+
+    def execute(self, capability_id, payload, envelope: ExecutionEnvelope):
+        return {
+            "status": "EXECUTED",
+            "verification_status": "UNKNOWN",
+            "capability_id": capability_id,
+            "operation_id": envelope.operation_id,
+            "runner": self.backend_name,
+            "exit_code": 0,
+            "stdout": "expected-output\n",
+            "stderr": "",
+            "persistent_effect": "NONE",
+            "isolation": {
+                "network_default": "DENY",
+                "root_filesystem": "READ_ONLY",
+                "capabilities": "ALL_DROPPED",
+            },
+        }
+
+
+class FailingAdapter:
+    def execute(self, capability_id, payload, envelope):
+        raise RuntimeError("synthetic worker failure")
+
+
+class FleetWorkerTests(unittest.TestCase):
+    def setup_job(self, root: Path, *, max_attempts=3):
+        workspace_root = root / "workspaces"
+        workspace = workspace_root / "demo"
+        workspace.mkdir(parents=True)
+        (workspace / "marker.txt").write_text("source", encoding="utf-8")
+        store = DurableFleetStore(root / "fleet.sqlite3")
+        store.record_plan({"plan_id": "PLAN-1", "status": "VERIFIED_PLAN", "goal": "x", "mode": "ALL"})
+        job = store.enqueue(
+            plan_id="PLAN-1",
+            workspace_id="demo",
+            capability_id="test-engineer",
+            argv=["python3", "-c", "print('expected-output')"],
+            verification_spec={
+                "expected_exit_code": 0,
+                "runner": "fake-isolated-v1",
+                "persistent_effect": "NONE",
+                "network_default": "DENY",
+                "root_filesystem": "READ_ONLY",
+                "capabilities": "ALL_DROPPED",
+                "stdout_contains": ["expected-output"],
+                "require_workspace_unchanged": True,
+            },
+            workspace_before_sha256=workspace_manifest_digest(workspace),
+            max_attempts=max_attempts,
+        )
+        return store, workspace_root, job
+
+    def test_worker_then_independent_verifier(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store, workspace_root, job = self.setup_job(root)
+            worker = FleetWorker(store, workspace_root, SECRET, "worker-a", adapter=FakeAdapter())
+            out = worker.run_once()
+            self.assertEqual(out["status"], "EXECUTED")
+            self.assertEqual(store.get_job(job["job_id"])["state"], "EXECUTED")
+
+            same_identity = IndependentFleetVerifier(store, workspace_root, "worker-a")
+            self.assertEqual(same_identity.run_once()["status"], "IDLE")
+
+            verifier = IndependentFleetVerifier(store, workspace_root, "verifier-b")
+            verified = verifier.run_once()
+            self.assertEqual(verified["status"], "VERIFIED")
+            self.assertTrue(all(verified["checks"].values()))
+            self.assertEqual(store.get_job(job["job_id"])["state"], "VERIFIED")
+            ok, reason = store.verify_event_chain()
+            self.assertTrue(ok, reason)
+
+    def test_worker_failure_consumes_retry_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store, workspace_root, job = self.setup_job(root, max_attempts=1)
+            worker = FleetWorker(store, workspace_root, SECRET, "worker-a", adapter=FailingAdapter())
+            out = worker.run_once()
+            self.assertEqual(out["status"], "FAILED")
+            self.assertEqual(store.get_job(job["job_id"])["state"], "FAILED")
+
+
+if __name__ == "__main__":
+    unittest.main()
