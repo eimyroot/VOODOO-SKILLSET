@@ -1,0 +1,89 @@
+name: r4-heartbeat-live
+
+on:
+  push:
+    branches: ["feat/r4-production-infrastructure"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-long-lease:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Prepare immutable container image
+        run: |
+          set -euo pipefail
+          docker pull --quiet python:3.12-slim
+          IMAGE="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          python3 - "$IMAGE" <<'PY'
+          import re,sys
+          image=sys.argv[1]
+          assert re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}', image), image
+          print('PINNED_IMAGE='+image)
+          PY
+          echo "VOODOO_EXECUTOR_CONTAINER_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "VOODOO_EXECUTOR_BACKEND=container" >> "$GITHUB_ENV"
+
+      - name: Prove long execution lease heartbeat with real Docker/runc
+        env:
+          PYTHONPATH: src
+          VOODOO_EXECUTOR_SHARED_SECRET: r4-live-secret-0123456789abcdef0123456789abcdef
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from voodoo_skillset.container_executor import DockerSandboxExecutor
+          from voodoo_skillset.fleet import DurableFleetStore, workspace_manifest_digest
+          from voodoo_skillset.fleet_worker import FleetWorker, IndependentFleetVerifier
+
+          root=Path(tempfile.mkdtemp(prefix='voodoo-r4-heartbeat-'))
+          wsroot=root/'workspaces'; ws=wsroot/'demo'; ws.mkdir(parents=True)
+          (ws/'marker.txt').write_text('source', encoding='utf-8')
+          store=DurableFleetStore(root/'fleet.sqlite3')
+          store.record_plan({'plan_id':'PLAN-R4','status':'VERIFIED_PLAN','goal':'long lease proof','mode':'ALL'})
+          job=store.enqueue(
+              plan_id='PLAN-R4', workspace_id='demo', capability_id='test-engineer',
+              argv=['python3','-c','import time; time.sleep(7); print("heartbeat-ok")'],
+              verification_spec={
+                  'expected_exit_code':0,
+                  'runner':'docker-container-v1',
+                  'persistent_effect':'NONE',
+                  'network_default':'DENY',
+                  'root_filesystem':'READ_ONLY',
+                  'capabilities':'ALL_DROPPED',
+                  'stdout_contains':['heartbeat-ok'],
+                  'require_workspace_unchanged':True,
+              },
+              workspace_before_sha256=workspace_manifest_digest(ws),
+          )
+          worker=FleetWorker(
+              store, wsroot, 'r4-live-secret-0123456789abcdef0123456789abcdef', 'worker-r4',
+              adapter=DockerSandboxExecutor(), lease_seconds=15,
+          )
+          result=worker.run_once()
+          assert result['status']=='EXECUTED', result
+          events=store.events(200)
+          heartbeats=[e for e in events if e.get('job_id')==job['job_id'] and e.get('kind')=='EXECUTION_HEARTBEAT']
+          assert heartbeats, events
+          verifier=IndependentFleetVerifier(store, wsroot, 'verifier-r4')
+          verified=verifier.run_once()
+          assert verified['status']=='VERIFIED', verified
+          final=store.get_job(job['job_id'])
+          assert final['state']=='VERIFIED', final
+          ok,reason=store.verify_event_chain(); assert ok, reason
+          print(json.dumps({
+              'verdict':'PASS',
+              'job_id':job['job_id'],
+              'heartbeats':len(heartbeats),
+              'execution':result['status'],
+              'verification':verified['status'],
+              'event_chain':'VERIFIED',
+          }, sort_keys=True))
+          PY
