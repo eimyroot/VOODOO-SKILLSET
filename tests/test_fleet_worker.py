@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -81,6 +82,30 @@ class FleetWorkerTests(unittest.TestCase):
             self.assertEqual(verified["status"], "VERIFIED")
             self.assertTrue(all(verified["checks"].values()))
             self.assertEqual(store.get_job(job["job_id"])["state"], "VERIFIED")
+            ok, reason = store.verify_event_chain()
+            self.assertTrue(ok, reason)
+
+    def test_verifier_missing_outcome_evidence_persists_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store, workspace_root, job = self.setup_job(root)
+            worker = FleetWorker(store, workspace_root, SECRET, "worker-a", adapter=FakeAdapter())
+            self.assertEqual(worker.run_once()["status"], "EXECUTED")
+
+            db = sqlite3.connect(store.path)
+            try:
+                db.execute("UPDATE jobs SET verification_spec_json='{}' WHERE job_id=?", (job["job_id"],))
+                db.commit()
+            finally:
+                db.close()
+
+            verifier = IndependentFleetVerifier(store, workspace_root, "verifier-b")
+            blocked = verifier.run_once()
+            self.assertEqual(blocked["status"], "BLOCKED")
+            self.assertEqual(blocked["queue_state"], "BLOCKED")
+            durable = store.get_job(job["job_id"])
+            self.assertEqual(durable["state"], "BLOCKED")
+            self.assertEqual(durable["verification"]["verdict"], "BLOCKED")
             ok, reason = store.verify_event_chain()
             self.assertTrue(ok, reason)
 
