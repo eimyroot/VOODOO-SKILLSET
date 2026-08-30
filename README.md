@@ -1,6 +1,6 @@
 # VOODOO-SKILLSET
 
-Governed orchestration control plane for selecting, composing, executing and verifying AI capabilities without granting unrestricted authority.
+Governed orchestration control plane for selecting, composing, executing and independently verifying AI capabilities without granting unrestricted authority.
 
 ## What is implemented
 
@@ -14,23 +14,29 @@ Governed orchestration control plane for selecting, composing, executing and ver
 - **Signed requests + signed receipts + persistent replay protection**
 - **Workspace-scoped COMPUTE execution with deny-by-default network**
 - **Fail-closed executor node with namespace or digest-pinned Docker/runc isolation**
+- **R3 durable Executor Fleet with atomic leases, TTL/heartbeat, retries and separate verifier leases**
+- **SQLite durable reference backend + Supabase/Postgres multi-instance contract**
+- **Worker/verifier coordinator clients that never receive database service-role credentials**
 - Authority Gate + fail-closed policy decisions
-- Hash-chained Evidence Ledger
-- Independent plan Verifier
+- Hash-chained Evidence Ledger + hash-chained fleet events
+- Independent plan Verifier + independent fleet verifier workers
 - Red-team mode
 - Zero-dependency REST API
-- Responsive Web Control Room
+- Responsive Web Control Room including Executor Fleet truth
 - CLI
 - CI matrix for Python 3.12 / 3.13
+- Real Linux Docker/runc executor and multi-worker fleet E2E gates
 
 ## Trust invariants
 
 ```text
 PROJECT IDENTITY != EXECUTION AUTHORITY
+EXECUTOR IDENTITY != VERIFIER IDENTITY
 UNKNOWN    != PASS
 MISSING    != PASS
 UNVERIFIED != PASS
 ExecutionReceipt != IndependentVerification
+ExclusiveLease != ExactlyOnce
 ```
 
 ## Local run
@@ -46,43 +52,85 @@ python -m voodoo_skillset.cli serve --port 8787
 
 Open `http://127.0.0.1:8787`.
 
-## Remote executor
-
-The public Control Plane and the executor are deliberately separate trust domains.
+## Executor architecture
 
 ```text
-Control Plane / Control Room
-        |
-        | HTTPS + HMAC signed request
-        v
-CASTER-MINAL executor node
-        |
-        | bounded workspace_id
-        v
+Operator / Browser
+       |
+       v
+VOODOO Control Plane
+       |
+       +---- durable VERIFIED_PLAN / queue / evidence ----+
+       |                                                   |
+       | WORKER bearer                                     | VERIFIER bearer
+       v                                                   v
+CASTER-MINAL workers 1..N                         independent verifier workers
+       |
+       | signed executor-v1
+       v
 safe backend probe
    |                 |
    v                 v
 Linux namespaces   Docker/runc container
                   digest-pinned image
-        |
-        v
-signed execution receipt
-        |
-        v
-independent verification (separate)
+       |
+       v
+signed receipt: UNKNOWN
+       |
+       +--------------------> durable coordinator ---------> VERIFIED / FAILED / BLOCKED
 ```
 
-The remote bridge accepts **COMPUTE only**. WRITE, REMOTE_WRITE, DEPLOY, DESTRUCTIVE and PRIVILEGED requests fail closed. Remote plaintext HTTP is refused; it is allowed only on localhost for development. Replay nonces persist in SQLite across executor restarts.
+The executor accepts **COMPUTE only**. WRITE, REMOTE_WRITE, DEPLOY, DESTRUCTIVE and PRIVILEGED requests fail closed. Remote plaintext coordinator/executor HTTP is refused except on localhost for development and CI.
 
 `VOODOO_EXECUTOR_BACKEND=auto` prefers the kernel namespace/chroot backend when its real capability probe succeeds. If user namespaces are blocked, it can use the container backend only when an immutable digest-pinned image has already been provisioned. There is no unisolated fallback.
 
-The container sandbox uses `--pull=never`, `--network=none`, a read-only root filesystem, all Linux capabilities dropped, no-new-privileges, bounded PID/CPU/memory/fd limits and only an ephemeral CASER workspace copy. The Docker socket and executor secrets are not mounted/inherited by the child workload.
+The Docker/runc sandbox uses `--pull=never`, `--network=none`, a read-only root filesystem, all Linux capabilities dropped, no-new-privileges, bounded PID/CPU/memory/file-size/fd/output limits and only an ephemeral CASER workspace copy. The Docker socket and executor/control-plane secrets are not mounted into the child workload.
 
-See [`docs/EXECUTOR_R1.md`](docs/EXECUTOR_R1.md) for the signed protocol and [`docs/EXECUTOR_R2.md`](docs/EXECUTOR_R2.md) for the real executor-node/container isolation model.
+See:
+
+- [`docs/EXECUTOR_R1.md`](docs/EXECUTOR_R1.md) — signed remote protocol
+- [`docs/EXECUTOR_R2.md`](docs/EXECUTOR_R2.md) — real isolated executor node
+- [`docs/EXECUTOR_R3.md`](docs/EXECUTOR_R3.md) — durable executor fleet and independent verifier workers
+
+## R3 durable fleet
+
+R3 separates four authority domains:
+
+```text
+CONTROL token   -> enqueue jobs for durable VERIFIED_PLAN only
+WORKER token    -> claim / heartbeat / receipt / failure only
+VERIFIER token  -> verification claim / verdict only
+DB service role -> Control Plane only
+```
+
+Workers and verifiers use the HTTP coordinator API. They never receive the Supabase service-role key. A worker also cannot verify a job it executed.
+
+The queue uses exclusive active leases with TTL and retry. This prevents legitimate concurrent double ownership, but retries make delivery at-least-once capable, so VOODOO does **not** mislabel this as mathematical exactly-once.
+
+### Durable backends
+
+**SQLite reference** is suitable for one persistent coordinator volume:
+
+```bash
+VOODOO_FLEET_DB=/srv/voodoo/fleet.sqlite3
+```
+
+**Supabase/Postgres** is the intended multi-instance Vercel backend:
+
+```text
+VOODOO_FLEET_SUPABASE_URL
+VOODOO_FLEET_SUPABASE_SERVICE_ROLE_KEY
+VOODOO_CONTROL_API_TOKEN
+VOODOO_FLEET_WORKER_TOKEN
+VOODOO_FLEET_VERIFIER_TOKEN
+VOODOO_EXECUTOR_SHARED_SECRET
+```
+
+The Postgres contract uses `FOR UPDATE SKIP LOCKED`, RLS, deny-by-default client roles, hashed lease tokens and append-only hash-chain events.
 
 ## Executor node
 
-A provisioned Linux node runs:
+A provisioned Linux node can run the standalone service:
 
 ```bash
 VOODOO_EXECUTOR_SHARED_SECRET='...' \
@@ -94,16 +142,39 @@ voodoo-executor \
   --port 8790
 ```
 
-The configured container image must be pre-pulled during host provisioning and referenced by its exact digest. Runtime execution never pulls a mutable image.
+Fleet workers can instead claim work from the Control Plane coordinator:
 
-**Docker daemon access is host-level authority.** If the container backend uses the conventional Docker daemon, deploy it only on a dedicated CASTER-MINAL executor host. The application repository does not silently install Docker, add users to privileged groups or modify host package repositories.
+```bash
+VOODOO_FLEET_WORKER_TOKEN='...' \
+VOODOO_EXECUTOR_SHARED_SECRET='...' \
+VOODOO_EXECUTOR_BACKEND=container \
+VOODOO_EXECUTOR_CONTAINER_IMAGE='name@sha256:<digest>' \
+voodoo-fleet-worker \
+  --coordinator-url https://control.example.com \
+  --workspace-root /srv/voodoo/workspaces \
+  --worker-id executor-01 \
+  --drain
+```
+
+The independent verifier uses a different bearer and identity:
+
+```bash
+VOODOO_FLEET_VERIFIER_TOKEN='...' \
+voodoo-fleet-verifier \
+  --coordinator-url https://control.example.com \
+  --workspace-root /srv/voodoo/workspaces \
+  --verifier-id verifier-01 \
+  --drain
+```
+
+**Docker daemon access is host-level authority.** Conventional Docker daemon access belongs only on a dedicated CASTER-MINAL executor host; rootless/daemonless isolation is preferred where operationally available.
 
 ## Reality boundary
 
-v0.5 provides a real networked executor service/client protocol plus a real container-isolated COMPUTE backend. A live Linux CI node has executed the full Control Plane → signed executor → Docker/runc sandbox → signed receipt path with network denied, read-only rootfs, all capabilities dropped, no host/Docker-socket/secret exposure and no persistent workspace mutation.
+v0.6 contains a real multi-worker fleet implementation and a deployable Supabase/Postgres contract. CI is designed to prove both the Postgres lease/RLS/event-chain behavior and a two-worker Docker/runc execution fleet with a separate independent verifier.
 
-That CI node is **ephemeral verification infrastructure, not a persistent production executor**. A persistent Linux VPS/VM still has to be provisioned and owned explicitly before the public Control Plane can be attached to a durable executor endpoint.
+GitHub-hosted Linux runners are real execution evidence but remain ephemeral verification infrastructure, not a persistent production fleet.
 
-The Vercel Control Plane itself cannot provide this kernel/container executor trust boundary. The public browser Control Room does **not** receive executor secrets. Server-side remote execution requires `VOODOO_CONTROL_API_TOKEN`, a configured executor URL/secret, and a locally recorded `VERIFIED_PLAN`.
+A dedicated VOODOO Supabase project has **not** been silently created or mixed into existing unrelated projects. Creating that paid durable database is a separate infrastructure authorization step. Persistent/on-demand Linux executor capacity and durable workspace/artifact transport are also separate production infrastructure boundaries.
 
-Current Vercel run/plan state is ephemeral, so durable multi-instance plan/evidence storage and user/session identity remain required before browser-driven production execution should be considered resilient.
+The browser Control Room exposes fleet truth but no execution/database secrets. Browser-driven production execution should remain blocked until durable identity/session authorization and the production fleet/database infrastructure are configured and independently verified.

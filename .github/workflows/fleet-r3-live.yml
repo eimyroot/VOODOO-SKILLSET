@@ -1,0 +1,26 @@
+name: fleet-r3-live
+
+on:
+  push:
+    branches: ["feat/r3-executor-fleet"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prove Supabase/Postgres durable fleet contract
+        run: bash scripts/ci/postgres_r3_contract.sh
+
+  real-fleet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prove two-worker Docker/runc fleet through coordinator API
+        run: bash scripts/ci/real_fleet_r3.sh
