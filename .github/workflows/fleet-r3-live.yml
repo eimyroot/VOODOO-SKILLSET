@@ -1,0 +1,318 @@
+name: fleet-r3-live
+
+on:
+  push:
+    branches: ["feat/r3-executor-fleet"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Start digest-pinned PostgreSQL 17
+        run: |
+          set -euo pipefail
+          docker pull --quiet postgres:17
+          PG_IMAGE="$(docker image inspect postgres:17 --format '{{index .RepoDigests 0}}')"
+          python3 - "$PG_IMAGE" <<'PY'
+          import re,sys
+          image=sys.argv[1]
+          assert re.fullmatch(r'[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}', image), image
+          print('POSTGRES_IMAGE='+image)
+          PY
+          docker run -d --name voodoo-pg \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 127.0.0.1:55432:5432 \
+            "$PG_IMAGE" >/tmp/pg-container-id
+          for i in $(seq 1 60); do
+            if docker exec voodoo-pg pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            sleep 0.25
+          done
+          docker exec voodoo-pg pg_isready -U postgres
+
+      - name: Apply Supabase/Postgres R3 migrations
+        run: |
+          set -euo pipefail
+          docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+          create role service_role noinherit;
+          create role anon noinherit;
+          create role authenticated noinherit;
+          SQL
+          docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet.sql
+          docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet_privileges.sql
+
+      - name: Prove service-role RPCs and atomic concurrent claims
+        run: |
+          set -euo pipefail
+          docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+          set role service_role;
+          select public.voodoo_record_plan('{"plan_id":"PLAN-PG","status":"VERIFIED_PLAN","goal":"r3 postgres","mode":"ALL"}'::jsonb);
+          select public.voodoo_enqueue_job(
+            'PLAN-PG','demo','test-engineer','["python3","-c","print(1)"]'::jsonb,'.',
+            '{"expected_exit_code":0}'::jsonb,null,100,3,'JOB-PG-1'
+          );
+          select public.voodoo_enqueue_job(
+            'PLAN-PG','demo','test-engineer','["python3","-c","print(2)"]'::jsonb,'.',
+            '{"expected_exit_code":0}'::jsonb,null,100,3,'JOB-PG-2'
+          );
+          SQL
+
+          docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
+            -c "set role service_role; select public.voodoo_claim_execution('worker-a',30)::text;" \
+            >/tmp/claim-a.json &
+          A_PID=$!
+          docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
+            -c "set role service_role; select public.voodoo_claim_execution('worker-b',30)::text;" \
+            >/tmp/claim-b.json &
+          B_PID=$!
+          wait "$A_PID" "$B_PID"
+
+          cat /tmp/claim-a.json
+          cat /tmp/claim-b.json
+          python3 - <<'PY'
+          import json
+          a=json.loads(open('/tmp/claim-a.json').read())
+          b=json.loads(open('/tmp/claim-b.json').read())
+          assert a['job_id'] != b['job_id'], (a,b)
+          assert {a['job_id'],b['job_id']} == {'JOB-PG-1','JOB-PG-2'}, (a,b)
+          assert a['lease_token'] and b['lease_token'] and a['lease_token'] != b['lease_token']
+          assert 'execution_lease_hash' not in a and 'execution_lease_hash' not in b
+          print('POSTGRES_ATOMIC_CLAIMS=PASS')
+          PY
+
+      - name: Prove deny-by-default database access and event chain
+        run: |
+          set -euo pipefail
+          if docker exec voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres \
+            -c "set role anon; select count(*) from public.voodoo_jobs;" >/tmp/anon.out 2>/tmp/anon.err; then
+            echo 'FAIL: anon unexpectedly read voodoo_jobs'
+            cat /tmp/anon.out
+            exit 1
+          fi
+          grep -Ei 'permission denied|privilege' /tmp/anon.err >/dev/null
+
+          docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
+            -c "set role service_role; select public.voodoo_verify_event_chain()::text;" >/tmp/chain.json
+          cat /tmp/chain.json
+          python3 - <<'PY'
+          import json
+          d=json.loads(open('/tmp/chain.json').read())
+          assert d['ok'] is True, d
+          assert d['event_count'] >= 5, d
+          print('POSTGRES_EVENT_CHAIN=PASS')
+          PY
+
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker rm -f voodoo-pg >/dev/null 2>&1 || true
+
+  real-fleet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Provision digest-pinned executor image and secrets
+        run: |
+          set -euo pipefail
+          docker pull --quiet python:3.12-slim
+          IMAGE="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          python3 - "$IMAGE" <<'PY'
+          import re,sys
+          image=sys.argv[1]
+          assert re.fullmatch(r'[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}', image), image
+          print('PINNED_EXECUTOR_IMAGE='+image)
+          PY
+          SECRET="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_hex(32))
+          PY
+          )"
+          CONTROL="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_urlsafe(32))
+          PY
+          )"
+          WORKER="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_urlsafe(32))
+          PY
+          )"
+          VERIFIER="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_urlsafe(32))
+          PY
+          )"
+          for value in "$SECRET" "$CONTROL" "$WORKER" "$VERIFIER"; do echo "::add-mask::$value"; done
+          {
+            echo "VOODOO_EXECUTOR_CONTAINER_IMAGE=$IMAGE"
+            echo "VOODOO_EXECUTOR_BACKEND=container"
+            echo "VOODOO_EXECUTOR_SHARED_SECRET=$SECRET"
+            echo "VOODOO_CONTROL_API_TOKEN=$CONTROL"
+            echo "VOODOO_FLEET_WORKER_TOKEN=$WORKER"
+            echo "VOODOO_FLEET_VERIFIER_TOKEN=$VERIFIER"
+          } >> "$GITHUB_ENV"
+
+          mkdir -p /tmp/voodoo-r3/workspaces/demo /tmp/voodoo-r3/state
+          printf 'canonical-source-workspace\n' > /tmp/voodoo-r3/workspaces/demo/marker.txt
+
+      - name: Start durable coordinator Control Plane
+        run: |
+          set -euo pipefail
+          VOODOO_FLEET_DB=/tmp/voodoo-r3/fleet.sqlite3 \
+          PYTHONPATH=src \
+            nohup python3 -m voodoo_skillset.cli serve --host 127.0.0.1 --port 8787 \
+            >/tmp/voodoo-r3-control.log 2>&1 &
+          echo $! >/tmp/voodoo-r3-control.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8787/api/fleet >/tmp/fleet-health.json; then break; fi
+            sleep 0.25
+          done
+          cat /tmp/fleet-health.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/fleet-health.json'))
+          assert d['status']=='AVAILABLE', d
+          assert d['execution']=='AVAILABLE', d
+          assert d['backend']=='sqlite-durable-reference', d
+          assert d['event_chain']=='VERIFIED', d
+          assert d['database_secret_exposed_to_workers'] is False, d
+          print('FLEET_COORDINATOR=PASS')
+          PY
+
+      - name: Create durable verified plan and enqueue four isolated jobs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,pathlib,urllib.request
+          base='http://127.0.0.1:8787'
+          def post(path,payload,token=None):
+              headers={'Content-Type':'application/json'}
+              if token: headers['Authorization']='Bearer '+token
+              req=urllib.request.Request(base+path,data=json.dumps(payload).encode(),headers=headers,method='POST')
+              with urllib.request.urlopen(req) as r: return json.load(r)
+          plan=post('/api/plan',{'goal':'audit repository security implement fixes test independently verify','mode':'ALL'})
+          assert plan['status']=='VERIFIED_PLAN',plan
+          assert plan['durable_record']=='RECORDED',plan
+          root=pathlib.Path('/tmp/voodoo-r3/workspaces/demo')
+          import sys
+          sys.path.insert(0,'src')
+          from voodoo_skillset.fleet import workspace_manifest_digest
+          before=workspace_manifest_digest(root)
+          control=os.environ['VOODOO_CONTROL_API_TOKEN']
+          script_template='''import os,pathlib,socket,time\ntime.sleep(1.2)\nprint("JOB_LABEL")\nprint("marker="+pathlib.Path("marker.txt").read_text().strip())\nprint("host_mnt="+str(pathlib.Path("/mnt/data").exists()))\nprint("docker_socket="+str(pathlib.Path("/var/run/docker.sock").exists()))\nprint("secret_env="+str("VOODOO_EXECUTOR_SHARED_SECRET" in os.environ))\npathlib.Path("EPHEMERAL_FILE").write_text("sandbox-only")\ntry:\n pathlib.Path("/etc/voodoo-write-probe").write_text("x"); print("root_write=OPEN")\nexcept OSError:\n print("root_write=DENIED")\ncapeff="UNKNOWN"\nfor line in pathlib.Path("/proc/self/status").read_text().splitlines():\n if line.startswith("CapEff:"): capeff=line.split(":",1)[1].strip()\nprint("cap_eff="+capeff)\ns=socket.socket(); s.settimeout(.3)\ntry:\n s.connect(("1.1.1.1",53)); print("network=OPEN")\nexcept OSError:\n print("network=DENIED")\n'''
+          jobs=[]
+          for i in range(4):
+              label=f'fleet-job-{i}'
+              script=script_template.replace('JOB_LABEL',label).replace('EPHEMERAL_FILE',f'ephemeral-{i}.txt')
+              job=post('/api/fleet/jobs',{
+                  'plan_id':plan['plan_id'],
+                  'workspace_id':'demo',
+                  'capability_id':'test-engineer',
+                  'argv':['python3','-c',script],
+                  'workspace_before_sha256':before,
+                  'max_attempts':2,
+                  'verification_spec':{
+                      'expected_exit_code':0,
+                      'runner':'docker-container-v1',
+                      'persistent_effect':'NONE',
+                      'network_default':'DENY',
+                      'root_filesystem':'READ_ONLY',
+                      'capabilities':'ALL_DROPPED',
+                      'stdout_contains':[label,'marker=canonical-source-workspace','host_mnt=False','docker_socket=False','secret_env=False','root_write=DENIED','cap_eff=0000000000000000','network=DENIED'],
+                      'require_workspace_unchanged':True,
+                  },
+              },control)
+              assert job['state']=='QUEUED',job
+              jobs.append(job['job_id'])
+          pathlib.Path('/tmp/r3-job-ids.json').write_text(json.dumps(jobs))
+          print(json.dumps({'plan_id':plan['plan_id'],'jobs':jobs,'workspace_before_sha256':before},sort_keys=True))
+          PY
+
+      - name: Run two real executor workers concurrently through coordinator API
+        run: |
+          set -euo pipefail
+          test -z "${VOODOO_FLEET_DB:-}"
+          WORKER_CODE='import sys; from voodoo_skillset.fleet_worker import worker_main; raise SystemExit(worker_main(sys.argv[1:]))'
+          PYTHONPATH=src python3 -c "$WORKER_CODE" \
+            --coordinator-url http://127.0.0.1:8787 \
+            --workspace-root /tmp/voodoo-r3/workspaces \
+            --worker-id worker-a --drain --max-jobs 2 \
+            >/tmp/worker-a.log 2>&1 &
+          A_PID=$!
+          PYTHONPATH=src python3 -c "$WORKER_CODE" \
+            --coordinator-url http://127.0.0.1:8787 \
+            --workspace-root /tmp/voodoo-r3/workspaces \
+            --worker-id worker-b --drain --max-jobs 2 \
+            >/tmp/worker-b.log 2>&1 &
+          B_PID=$!
+          wait "$A_PID" "$B_PID"
+          echo '--- worker-a ---'; cat /tmp/worker-a.log
+          echo '--- worker-b ---'; cat /tmp/worker-b.log
+          grep '"status": "EXECUTED"' /tmp/worker-a.log >/dev/null
+          grep '"status": "EXECUTED"' /tmp/worker-b.log >/dev/null
+
+      - name: Run separate independent verifier worker
+        run: |
+          set -euo pipefail
+          test -z "${VOODOO_FLEET_DB:-}"
+          VERIFY_CODE='import sys; from voodoo_skillset.fleet_worker import verifier_main; raise SystemExit(verifier_main(sys.argv[1:]))'
+          PYTHONPATH=src python3 -c "$VERIFY_CODE" \
+            --coordinator-url http://127.0.0.1:8787 \
+            --workspace-root /tmp/voodoo-r3/workspaces \
+            --verifier-id verifier-1 --drain --max-jobs 4 \
+            >/tmp/verifier.log 2>&1
+          cat /tmp/verifier.log
+          test "$(grep -c '"status": "VERIFIED"' /tmp/verifier.log)" -eq 4
+
+      - name: Verify fleet truth, exclusive ownership and no persistent effects
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8787/api/fleet >/tmp/fleet-final.json
+          cat /tmp/fleet-final.json
+          PYTHONPATH=src python3 - <<'PY'
+          import json,pathlib,sqlite3
+          d=json.load(open('/tmp/fleet-final.json'))
+          counts=d['stats']['counts']
+          assert d['event_chain']=='VERIFIED',d
+          assert counts['VERIFIED']==4,counts
+          for state in ['QUEUED','LEASED','EXECUTED','VERIFYING','FAILED','BLOCKED']:
+              assert counts[state]==0,(state,counts)
+          db=sqlite3.connect('/tmp/voodoo-r3/fleet.sqlite3'); db.row_factory=sqlite3.Row
+          rows=db.execute('select job_id,state,attempts,execution_worker_id,verifier_id from jobs order by job_id').fetchall()
+          assert len(rows)==4,rows
+          assert all(r['state']=='VERIFIED' and r['attempts']==1 for r in rows),[dict(r) for r in rows]
+          workers={r['execution_worker_id'] for r in rows}
+          assert workers=={'worker-a','worker-b'},workers
+          assert {r['verifier_id'] for r in rows}=={'verifier-1'},[dict(r) for r in rows]
+          workspace=pathlib.Path('/tmp/voodoo-r3/workspaces/demo')
+          assert not list(workspace.glob('ephemeral-*.txt')),list(workspace.glob('ephemeral-*.txt'))
+          from voodoo_skillset.fleet import DurableFleetStore
+          ok,reason=DurableFleetStore('/tmp/voodoo-r3/fleet.sqlite3').verify_event_chain()
+          assert ok,reason
+          print(json.dumps({
+              'verdict':'PASS',
+              'jobs':4,
+              'workers':sorted(workers),
+              'verifier':'verifier-1',
+              'attempts_per_job':[r['attempts'] for r in rows],
+              'final_state':'VERIFIED',
+              'event_chain':'VERIFIED',
+              'persistent_workspace_effect':'NONE',
+              'database_credentials_on_workers':False,
+              'delivery_semantics':'exclusive active lease; retry-capable at-least-once',
+          },sort_keys=True))
+          PY
+
+      - name: Stop coordinator
+        if: always()
+        run: |
+          test ! -f /tmp/voodoo-r3-control.pid || kill "$(cat /tmp/voodoo-r3-control.pid)" 2>/dev/null || true
+          echo '--- control log ---'
+          tail -150 /tmp/voodoo-r3-control.log 2>/dev/null || true
