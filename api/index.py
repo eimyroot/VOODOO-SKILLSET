@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -16,6 +17,18 @@ from voodoo_skillset.fleet_supabase import SupabaseFleetError  # noqa: E402
 _APP = App(ROOT)
 
 
+def _canonical_sha() -> str | None:
+    value = os.environ.get("VOODOO_CANONICAL_SHA", "").strip() or os.environ.get("VERCEL_GIT_COMMIT_SHA", "").strip()
+    return value if len(value) == 40 else None
+
+
+def _health():
+    value = _APP.health()
+    value["canonical_sha"] = _canonical_sha()
+    value["canonical_sha_source"] = "VOODOO_CANONICAL_SHA" if os.environ.get("VOODOO_CANONICAL_SHA", "").strip() else ("VERCEL_GIT_COMMIT_SHA" if _canonical_sha() else None)
+    return value
+
+
 class handler(BaseHTTPRequestHandler):
     def _json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -23,6 +36,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        canonical = _canonical_sha()
+        if canonical:
+            self.send_header("X-Canonical-SHA", canonical)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -34,7 +50,7 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = self._route()
         endpoints = {
-            "health": _APP.health,
+            "health": _health,
             "capabilities": _APP.capabilities,
             "runtime": _APP.runtime_status,
             "executor": _APP.executor_status,
