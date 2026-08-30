@@ -1,0 +1,184 @@
+name: executor-node-live-smoke
+
+on:
+  push:
+    branches: ["ops/r1-live-executor-node"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify real Linux namespace capability
+        run: |
+          set -euo pipefail
+          python3 --version
+          command -v unshare
+          unshare --version
+          unshare --user --map-root-user --mount --net --pid --fork true
+          echo "NAMESPACE_PROBE=PASS"
+
+      - name: Start real CASTER-MINAL executor node
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/voodoo-node/workspaces/demo
+          printf 'inside-executor-workspace\n' > /tmp/voodoo-node/workspaces/demo/marker.txt
+
+          SECRET="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_hex(32))
+          PY
+          )"
+          CONTROL_TOKEN="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_urlsafe(32))
+          PY
+          )"
+          echo "::add-mask::$SECRET"
+          echo "::add-mask::$CONTROL_TOKEN"
+          {
+            echo "VOODOO_EXECUTOR_SHARED_SECRET=$SECRET"
+            echo "VOODOO_CONTROL_API_TOKEN=$CONTROL_TOKEN"
+            echo "VOODOO_EXECUTOR_URL=http://127.0.0.1:8790"
+          } >> "$GITHUB_ENV"
+
+          PYTHONPATH=src VOODOO_EXECUTOR_SHARED_SECRET="$SECRET" \
+            nohup python3 -m voodoo_skillset.cli executor-serve \
+              --workspace-root /tmp/voodoo-node/workspaces \
+              --host 127.0.0.1 --port 8790 \
+              >/tmp/voodoo-executor.log 2>&1 &
+          echo $! >/tmp/voodoo-executor.pid
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8790/health >/tmp/executor-health.json; then break; fi
+            sleep 0.2
+          done
+          cat /tmp/executor-health.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/executor-health.json'))
+          assert d['status']=='ok', d
+          assert d['execution']=='AVAILABLE', d
+          assert d['protocol']=='executor-v1', d
+          assert d['network_default']=='DENY', d
+          assert d['receipt_is_verification'] is False, d
+          print('EXECUTOR_HEALTH=PASS')
+          PY
+
+      - name: Start Control Plane bound to executor
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src \
+          VOODOO_EXECUTOR_URL="$VOODOO_EXECUTOR_URL" \
+          VOODOO_EXECUTOR_SHARED_SECRET="$VOODOO_EXECUTOR_SHARED_SECRET" \
+          VOODOO_CONTROL_API_TOKEN="$VOODOO_CONTROL_API_TOKEN" \
+            nohup python3 -m voodoo_skillset.cli serve --host 127.0.0.1 --port 8787 \
+              >/tmp/voodoo-control.log 2>&1 &
+          echo $! >/tmp/voodoo-control.pid
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/api/executor >/tmp/control-executor.json; then break; fi
+            sleep 0.2
+          done
+          cat /tmp/control-executor.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/control-executor.json'))
+          assert d['status']=='AVAILABLE', d
+          assert d['execution']=='AVAILABLE', d
+          assert d['remote']['protocol']=='executor-v1', d
+          print('CONTROL_TO_EXECUTOR_HEALTH=PASS')
+          PY
+
+      - name: Execute verified plan through real node
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H 'Content-Type: application/json' \
+            --data '{"goal":"audit repository security implement fixes test independently verify","mode":"ALL"}' \
+            http://127.0.0.1:8787/api/plan > /tmp/plan.json
+
+          PLAN_ID="$(python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/plan.json'))
+          assert d['status']=='VERIFIED_PLAN', d
+          print(d['plan_id'])
+          PY
+          )"
+          echo "PLAN_STATUS=VERIFIED_PLAN"
+
+          python3 - "$PLAN_ID" > /tmp/execute-payload.json <<'PY'
+          import json,sys
+          plan_id=sys.argv[1]
+          script="""import pathlib,socket
+          print('marker='+pathlib.Path('marker.txt').read_text().strip())
+          print('host_mnt='+str(pathlib.Path('/mnt/data').exists()))
+          pathlib.Path('ephemeral.txt').write_text('sandbox-only')
+          s=socket.socket(); s.settimeout(.3)
+          try:
+              s.connect(('1.1.1.1',53)); print('network=OPEN')
+          except OSError:
+              print('network=DENIED')
+          """
+          print(json.dumps({
+              'plan_id':plan_id,
+              'workspace_id':'demo',
+              'capability_id':'governed-terminal',
+              'argv':['python3','-c',script],
+          }))
+          PY
+
+          curl -fsS \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $VOODOO_CONTROL_API_TOKEN" \
+            --data-binary @/tmp/execute-payload.json \
+            http://127.0.0.1:8787/api/executor/execute > /tmp/execution.json
+
+          python3 - <<'PY'
+          import json,pathlib
+          d=json.load(open('/tmp/execution.json'))
+          r=d['receipt']
+          result=r['result']
+          assert d['receipt_signature_verified'] is True, d
+          assert d['independent_verification']=='PENDING', d
+          assert r['verification_status']=='UNKNOWN', d
+          assert result['status']=='EXECUTED', d
+          assert result['exit_code']==0, d
+          assert result['persistent_effect']=='NONE', d
+          assert result['isolation']['network_namespace'] is True, d
+          assert result['isolation']['filesystem']=='CHROOT_STAGE_ONLY', d
+          out=result['stdout']
+          assert 'marker=inside-executor-workspace' in out, out
+          assert 'host_mnt=False' in out, out
+          assert 'network=DENIED' in out, out
+          assert not pathlib.Path('/tmp/voodoo-node/workspaces/demo/ephemeral.txt').exists()
+          summary={
+              'verdict':'PASS',
+              'protocol':'executor-v1',
+              'receipt_signature_verified':True,
+              'execution_status':result['status'],
+              'verification_status':r['verification_status'],
+              'independent_verification':d['independent_verification'],
+              'network':'DENIED',
+              'host_filesystem_exposed':False,
+              'persistent_effect':result['persistent_effect'],
+              'runner':result['runner'],
+          }
+          print(json.dumps(summary,sort_keys=True))
+          PY
+
+      - name: Stop services
+        if: always()
+        run: |
+          test ! -f /tmp/voodoo-control.pid || kill "$(cat /tmp/voodoo-control.pid)" 2>/dev/null || true
+          test ! -f /tmp/voodoo-executor.pid || kill "$(cat /tmp/voodoo-executor.pid)" 2>/dev/null || true
+          echo '--- executor log ---'
+          tail -100 /tmp/voodoo-executor.log 2>/dev/null || true
+          echo '--- control log ---'
+          tail -100 /tmp/voodoo-control.log 2>/dev/null || true
