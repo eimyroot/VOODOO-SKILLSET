@@ -1,0 +1,215 @@
+name: executor-node-r2-live
+
+on:
+  push:
+    branches: ["feat/r2-container-executor"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-container-node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Record namespace boundary and prepare pinned container image
+        run: |
+          set -euo pipefail
+          if unshare --user --map-root-user --mount --net --pid --fork true 2>/tmp/unshare.err; then
+            echo 'NAMESPACE_BACKEND=AVAILABLE'
+          else
+            echo 'NAMESPACE_BACKEND=BLOCKED'
+            cat /tmp/unshare.err
+          fi
+          docker version
+          docker pull --quiet python:3.12-slim
+          IMAGE="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          python3 - "$IMAGE" <<'PY'
+          import re,sys
+          image=sys.argv[1]
+          assert re.fullmatch(r'[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}', image), image
+          print('PINNED_IMAGE='+image)
+          PY
+          echo "VOODOO_EXECUTOR_CONTAINER_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "VOODOO_EXECUTOR_BACKEND=auto" >> "$GITHUB_ENV"
+
+      - name: Start real CASTER-MINAL executor node
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/voodoo-node/workspaces/demo
+          printf 'inside-executor-workspace\n' > /tmp/voodoo-node/workspaces/demo/marker.txt
+          SECRET="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_hex(32))
+          PY
+          )"
+          CONTROL_TOKEN="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_urlsafe(32))
+          PY
+          )"
+          echo "::add-mask::$SECRET"
+          echo "::add-mask::$CONTROL_TOKEN"
+          {
+            echo "VOODOO_EXECUTOR_SHARED_SECRET=$SECRET"
+            echo "VOODOO_CONTROL_API_TOKEN=$CONTROL_TOKEN"
+            echo "VOODOO_EXECUTOR_URL=http://127.0.0.1:8790"
+          } >> "$GITHUB_ENV"
+
+          PYTHONPATH=src \
+          VOODOO_EXECUTOR_BACKEND="$VOODOO_EXECUTOR_BACKEND" \
+          VOODOO_EXECUTOR_CONTAINER_IMAGE="$VOODOO_EXECUTOR_CONTAINER_IMAGE" \
+          VOODOO_EXECUTOR_SHARED_SECRET="$SECRET" \
+            nohup python3 -m voodoo_skillset.executor_node \
+              --workspace-root /tmp/voodoo-node/workspaces \
+              --host 127.0.0.1 --port 8790 \
+              >/tmp/voodoo-executor.log 2>&1 &
+          echo $! >/tmp/voodoo-executor.pid
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8790/health >/tmp/executor-health.json; then break; fi
+            sleep 0.25
+          done
+          cat /tmp/executor-health.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/executor-health.json'))
+          assert d['status']=='ok', d
+          assert d['execution']=='AVAILABLE', d
+          assert d['protocol']=='executor-v1', d
+          assert d['network_default']=='DENY', d
+          assert d['receipt_is_verification'] is False, d
+          assert 'docker-container-v1' in d['reason'], d
+          print('REAL_EXECUTOR_HEALTH=PASS')
+          PY
+
+      - name: Bind Control Plane to real node
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src \
+          VOODOO_EXECUTOR_URL="$VOODOO_EXECUTOR_URL" \
+          VOODOO_EXECUTOR_SHARED_SECRET="$VOODOO_EXECUTOR_SHARED_SECRET" \
+          VOODOO_CONTROL_API_TOKEN="$VOODOO_CONTROL_API_TOKEN" \
+            nohup python3 -m voodoo_skillset.cli serve --host 127.0.0.1 --port 8787 \
+              >/tmp/voodoo-control.log 2>&1 &
+          echo $! >/tmp/voodoo-control.pid
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8787/api/executor >/tmp/control-executor.json; then break; fi
+            sleep 0.25
+          done
+          cat /tmp/control-executor.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/control-executor.json'))
+          assert d['status']=='AVAILABLE', d
+          assert d['execution']=='AVAILABLE', d
+          assert d['remote']['protocol']=='executor-v1', d
+          print('CONTROL_PLANE_BINDING=PASS')
+          PY
+
+      - name: Execute a verified plan through real isolated node
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H 'Content-Type: application/json' \
+            --data '{"goal":"audit repository security implement fixes test independently verify","mode":"ALL"}' \
+            http://127.0.0.1:8787/api/plan > /tmp/plan.json
+          PLAN_ID="$(python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/plan.json'))
+          assert d['status']=='VERIFIED_PLAN', d
+          print(d['plan_id'])
+          PY
+          )"
+
+          python3 - "$PLAN_ID" > /tmp/execute-payload.json <<'PY'
+          import json,sys
+          plan_id=sys.argv[1]
+          script="""import os,pathlib,socket
+          print('marker='+pathlib.Path('marker.txt').read_text().strip())
+          print('host_mnt='+str(pathlib.Path('/mnt/data').exists()))
+          print('docker_socket='+str(pathlib.Path('/var/run/docker.sock').exists()))
+          print('secret_env='+str('VOODOO_EXECUTOR_SHARED_SECRET' in os.environ))
+          pathlib.Path('ephemeral.txt').write_text('sandbox-only')
+          try:
+              pathlib.Path('/etc/voodoo-write-probe').write_text('x'); print('root_write=OPEN')
+          except OSError:
+              print('root_write=DENIED')
+          capeff='UNKNOWN'
+          for line in pathlib.Path('/proc/self/status').read_text().splitlines():
+              if line.startswith('CapEff:'): capeff=line.split(':',1)[1].strip()
+          print('cap_eff='+capeff)
+          s=socket.socket(); s.settimeout(.3)
+          try:
+              s.connect(('1.1.1.1',53)); print('network=OPEN')
+          except OSError:
+              print('network=DENIED')
+          """
+          print(json.dumps({
+              'plan_id':plan_id,
+              'workspace_id':'demo',
+              'capability_id':'governed-terminal',
+              'argv':['python3','-c',script],
+          }))
+          PY
+
+          curl -fsS \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $VOODOO_CONTROL_API_TOKEN" \
+            --data-binary @/tmp/execute-payload.json \
+            http://127.0.0.1:8787/api/executor/execute > /tmp/execution.json
+
+          python3 - <<'PY'
+          import json,pathlib
+          d=json.load(open('/tmp/execution.json'))
+          receipt=d['receipt']; result=receipt['result']; out=result['stdout']
+          assert d['receipt_signature_verified'] is True, d
+          assert d['independent_verification']=='PENDING', d
+          assert receipt['verification_status']=='UNKNOWN', d
+          assert result['status']=='EXECUTED', d
+          assert result['exit_code']==0, d
+          assert result['runner']=='docker-container-v1', d
+          assert result['persistent_effect']=='NONE', d
+          assert result['isolation']['network_default']=='DENY', d
+          assert result['isolation']['root_filesystem']=='READ_ONLY', d
+          assert result['isolation']['capabilities']=='ALL_DROPPED', d
+          assert result['isolation']['no_new_privileges'] is True, d
+          assert 'marker=inside-executor-workspace' in out, out
+          assert 'host_mnt=False' in out, out
+          assert 'docker_socket=False' in out, out
+          assert 'secret_env=False' in out, out
+          assert 'root_write=DENIED' in out, out
+          assert 'cap_eff=0000000000000000' in out, out
+          assert 'network=DENIED' in out, out
+          assert not pathlib.Path('/tmp/voodoo-node/workspaces/demo/ephemeral.txt').exists()
+          print(json.dumps({
+              'verdict':'PASS',
+              'runner':result['runner'],
+              'container_image':result['container_image'],
+              'protocol':'executor-v1',
+              'receipt_signature_verified':True,
+              'execution_status':result['status'],
+              'verification_status':receipt['verification_status'],
+              'independent_verification':d['independent_verification'],
+              'network':'DENIED',
+              'host_filesystem_exposed':False,
+              'docker_socket_exposed':False,
+              'capabilities':'ALL_DROPPED',
+              'root_filesystem':'READ_ONLY',
+              'persistent_effect':result['persistent_effect'],
+          },sort_keys=True))
+          PY
+
+      - name: Stop services
+        if: always()
+        run: |
+          test ! -f /tmp/voodoo-control.pid || kill "$(cat /tmp/voodoo-control.pid)" 2>/dev/null || true
+          test ! -f /tmp/voodoo-executor.pid || kill "$(cat /tmp/voodoo-executor.pid)" 2>/dev/null || true
+          echo '--- executor log ---'
+          tail -100 /tmp/voodoo-executor.log 2>/dev/null || true
+          echo '--- control log ---'
+          tail -100 /tmp/voodoo-control.log 2>/dev/null || true

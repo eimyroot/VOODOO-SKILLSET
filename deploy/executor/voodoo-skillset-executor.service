@@ -1,15 +1,18 @@
 [Unit]
-Description=VOODOO-SKILLSET CASTER-MINAL Executor
-After=network-online.target
-Wants=network-online.target
+Description=VOODOO-SKILLSET CASTER-MINAL Executor Node
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple
 User=voodoo-executor
 Group=voodoo-executor
+# Container backend only: access to the Docker daemon is host-level authority.
+# Use this only on a DEDICATED executor host. Prefer a rootless daemon when available.
+SupplementaryGroups=docker
 WorkingDirectory=/opt/voodoo-skillset
 EnvironmentFile=/etc/voodoo-skillset/executor.env
-ExecStart=/opt/voodoo-skillset/.venv/bin/voodoo-skillset executor-serve --workspace-root /srv/voodoo/workspaces --host 127.0.0.1 --port 8790
+ExecStart=/opt/voodoo-skillset/.venv/bin/voodoo-executor --workspace-root /srv/voodoo/workspaces --host 127.0.0.1 --port 8790
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
