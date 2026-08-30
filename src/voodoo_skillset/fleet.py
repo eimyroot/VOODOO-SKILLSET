@@ -497,8 +497,8 @@ class DurableFleetStore:
         proof: dict[str, Any],
     ) -> dict[str, Any]:
         self._validate_owner(verifier_id)
-        if verdict not in {"VERIFIED", "FAILED"}:
-            raise ValueError("verdict must be VERIFIED or FAILED")
+        if verdict not in {"VERIFIED", "FAILED", "BLOCKED"}:
+            raise ValueError("verdict must be VERIFIED, FAILED or BLOCKED")
         if not isinstance(proof, dict):
             raise ValueError("verification proof must be an object")
         checks = proof.get("checks")
@@ -522,6 +522,12 @@ class DurableFleetStore:
                 "receipt_sha256": row["receipt_sha256"],
                 "verified_at": now,
             }
+            if verdict == "VERIFIED":
+                last_error = None
+            elif verdict == "BLOCKED":
+                last_error = "independent verification blocked"
+            else:
+                last_error = "independent verification failed"
             db.execute(
                 "UPDATE jobs SET state=?,verification_json=?,verification_lease_hash=NULL,"
                 "verification_lease_expires_at=NULL,updated_at=?,last_error=? WHERE job_id=?",
@@ -529,7 +535,7 @@ class DurableFleetStore:
                     verdict,
                     json.dumps(verification, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
                     now,
-                    None if verdict == "VERIFIED" else "independent verification failed",
+                    last_error,
                     job_id,
                 ),
             )
