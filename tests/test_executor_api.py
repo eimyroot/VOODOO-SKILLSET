@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from voodoo_skillset.api import App, handler_factory
-from voodoo_skillset.executor_bridge import build_executor_server
+from voodoo_skillset.executor_bridge import ExecutorProtocolError, build_executor_server
 
 ROOT = Path(__file__).resolve().parents[1]
 SECRET = "s" * 48
@@ -81,6 +81,23 @@ class ExecutorApiTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read())
 
+    def verified_plan(self):
+        status, plan = self.request("/api/plan", {
+            "goal": "audit github repo security implement fixes test verify",
+            "mode": "ALL",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(plan["status"], "VERIFIED_PLAN")
+        return plan
+
+    def execution_payload(self, plan_id):
+        return {
+            "plan_id": plan_id,
+            "workspace_id": "demo",
+            "capability_id": "governed-terminal",
+            "argv": ["python3", "-c", "print('ok')"],
+        }
+
     def test_executor_status_is_available(self):
         status, body = self.request("/api/executor")
         self.assertEqual(status, 200)
@@ -88,19 +105,9 @@ class ExecutorApiTests(unittest.TestCase):
         self.assertEqual(body["remote"]["protocol"], "executor-v1")
 
     def test_control_plane_to_executor_round_trip(self):
-        status, plan = self.request("/api/plan", {
-            "goal": "audit github repo security implement fixes test verify",
-            "mode": "ALL",
-        })
-        self.assertEqual(status, 200)
-        self.assertEqual(plan["status"], "VERIFIED_PLAN")
+        plan = self.verified_plan()
+        payload = self.execution_payload(plan["plan_id"])
 
-        payload = {
-            "plan_id": plan["plan_id"],
-            "workspace_id": "demo",
-            "capability_id": "governed-terminal",
-            "argv": ["python3", "-c", "print('ok')"],
-        }
         status, denied = self.request("/api/executor/execute", payload)
         self.assertEqual(status, 403)
         self.assertIn("authorization", denied["error"])
@@ -111,6 +118,17 @@ class ExecutorApiTests(unittest.TestCase):
         self.assertEqual(out["independent_verification"], "PENDING")
         self.assertEqual(out["receipt"]["verification_status"], "UNKNOWN")
         self.assertEqual(out["receipt"]["result"]["network_default"], "DENY")
+
+    def test_executor_protocol_failure_is_bad_gateway(self):
+        plan = self.verified_plan()
+        payload = self.execution_payload(plan["plan_id"])
+        with patch(
+            "voodoo_skillset.api.RemoteExecutorClient.execute",
+            side_effect=ExecutorProtocolError("downstream executor protocol failure"),
+        ):
+            status, body = self.request("/api/executor/execute", payload, CONTROL_TOKEN)
+        self.assertEqual(status, 502)
+        self.assertIn("protocol failure", body["error"])
 
     def test_unknown_plan_is_fail_closed(self):
         status, body = self.request("/api/executor/execute", {
