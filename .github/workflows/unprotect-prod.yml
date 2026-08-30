@@ -1,0 +1,81 @@
+name: unprotect-production
+
+on:
+  push:
+    branches:
+      - ops/prod-verify-afa561b9
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disable-sso-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      TEAM_ID: team_P8cB47XVLz6mGykUGFdfh0ki
+      PROJECT_NAME: voodoo-skillset
+      PROD_ALIAS: https://voodoo-skillset-voodoo-caser.vercel.app
+      EXPECTED_SHA: afa561b93baef009a0f1d54058f8f728bc168dce
+    steps:
+      - name: Require existing Vercel credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::VERCEL_TOKEN is not configured in GitHub Actions secrets"
+            exit 2
+          fi
+          echo "VERCEL_TOKEN is configured (value not printed)."
+
+      - name: Disable Vercel Authentication for this project
+        shell: bash
+        run: |
+          set -euo pipefail
+          code=$(curl -sS --connect-timeout 10 --max-time 30 \
+            -o /tmp/vercel-response.json \
+            -w '%{http_code}' \
+            -X PATCH \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{"ssoProtection":null}' \
+            "https://api.vercel.com/v9/projects/$PROJECT_NAME?teamId=$TEAM_ID")
+          echo "Vercel update HTTP status: $code"
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/vercel-response.json')
+          text=p.read_text(errors='replace') if p.exists() else ''
+          print(text[:4000])
+          PY
+          test "$code" = "200"
+
+      - name: Verify public production health
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, time, urllib.request
+          base=os.environ['PROD_ALIAS']
+          expected=os.environ['EXPECTED_SHA']
+          last=None
+          for attempt in range(1,7):
+              try:
+                  req=urllib.request.Request(base+'/api/health',headers={'User-Agent':'VOODOO-SKILLSET-independent-verifier/3.0'})
+                  with urllib.request.urlopen(req,timeout=20) as r:
+                      body=r.read().decode('utf-8',errors='replace')
+                      print('attempt=',attempt,'status=',r.status,'final_url=',r.geturl(),'body=',body[:1200])
+                      data=json.loads(body)
+                      assert r.status == 200
+                      assert data.get('status') == 'ok'
+                      assert data.get('version') == '0.3.0'
+                      assert data.get('canonical_sha') == expected
+                      print('PUBLIC PRODUCTION VERDICT: PASS')
+                      raise SystemExit(0)
+              except Exception as exc:
+                  last=exc
+                  print('attempt=',attempt,'failed=',repr(exc))
+                  time.sleep(5)
+          raise SystemExit(f'PUBLIC PRODUCTION VERDICT: FAIL: {last!r}')
+          PY
