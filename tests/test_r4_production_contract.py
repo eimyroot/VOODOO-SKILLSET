@@ -1,0 +1,58 @@
+import json
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class R4ProductionContractTests(unittest.TestCase):
+    def test_vercel_wrapper_exposes_fleet_and_provenance(self):
+        text = (ROOT / "api/index.py").read_text(encoding="utf-8")
+        for route in [
+            '"fleet"', '"fleet/events"', '"fleet/jobs"', '"fleet/claim"',
+            '"fleet/heartbeat"', '"fleet/complete"', '"fleet/fail"',
+            '"fleet/verify/claim"', '"fleet/verify/complete"',
+        ]:
+            self.assertIn(route, text)
+        self.assertIn("VOODOO_CANONICAL_SHA", text)
+        self.assertIn("VERCEL_GIT_COMMIT_SHA", text)
+        self.assertIn("X-Canonical-SHA", text)
+
+    def test_main_ruleset_is_fail_closed(self):
+        ruleset = json.loads((ROOT / "infra/r4/github/main-ruleset.json").read_text(encoding="utf-8"))
+        self.assertEqual(ruleset["enforcement"], "active")
+        self.assertEqual(ruleset["conditions"]["ref_name"]["include"], ["refs/heads/main"])
+        types = {rule["type"] for rule in ruleset["rules"]}
+        self.assertTrue({"deletion", "non_fast_forward", "required_linear_history", "required_signatures", "pull_request", "required_status_checks"} <= types)
+        pr = next(rule for rule in ruleset["rules"] if rule["type"] == "pull_request")
+        self.assertEqual(pr["parameters"]["allowed_merge_methods"], ["squash"])
+        self.assertTrue(pr["parameters"]["required_review_thread_resolution"])
+        checks = next(rule for rule in ruleset["rules"] if rule["type"] == "required_status_checks")
+        contexts = {item["context"] for item in checks["parameters"]["required_status_checks"]}
+        self.assertEqual(contexts, {"test (3.12)", "test (3.13)"})
+        self.assertTrue(checks["parameters"]["strict_required_status_checks_policy"])
+
+    def test_secret_boundaries_are_separate(self):
+        worker = (ROOT / "infra/r4/executor/worker.env.example").read_text(encoding="utf-8")
+        verifier = (ROOT / "infra/r4/executor/verifier.env.example").read_text(encoding="utf-8")
+        self.assertIn("VOODOO_FLEET_WORKER_TOKEN=", worker)
+        self.assertIn("VOODOO_EXECUTOR_SHARED_SECRET=", worker)
+        self.assertNotIn("VOODOO_FLEET_VERIFIER_TOKEN=REPLACE", worker)
+        self.assertNotIn("VOODOO_FLEET_SUPABASE_SERVICE_ROLE_KEY=REPLACE", worker)
+        self.assertIn("VOODOO_FLEET_VERIFIER_TOKEN=", verifier)
+        self.assertNotIn("VOODOO_EXECUTOR_SHARED_SECRET=REPLACE", verifier)
+        self.assertNotIn("VOODOO_FLEET_WORKER_TOKEN=REPLACE", verifier)
+
+    def test_persistent_services_use_forever_and_lease_heartbeat_configuration(self):
+        worker = (ROOT / "infra/r4/executor/voodoo-fleet-worker.service").read_text(encoding="utf-8")
+        verifier = (ROOT / "infra/r4/executor/voodoo-fleet-verifier.service").read_text(encoding="utf-8")
+        self.assertIn("--forever", worker)
+        self.assertIn("--lease-seconds=90", worker)
+        self.assertIn("SupplementaryGroups=docker", worker)
+        self.assertIn("--forever", verifier)
+        self.assertNotIn("SupplementaryGroups=docker", verifier)
+        self.assertIn("ReadOnlyPaths=/srv/voodoo/workspaces", verifier)
+
+
+if __name__ == "__main__":
+    unittest.main()
