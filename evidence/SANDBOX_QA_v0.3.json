@@ -1,0 +1,28 @@
+{
+  "status": "PASS",
+  "runner": "linux-namespace-chroot-v1",
+  "availability_probe": "linux user/mount/network/pid namespaces available",
+  "verification_status": "UNKNOWN",
+  "isolation": {
+    "user_namespace": true,
+    "mount_namespace": true,
+    "network_namespace": true,
+    "pid_namespace": true,
+    "network_default": "DENY",
+    "filesystem": "CHROOT_STAGE_ONLY",
+    "system_mounts": "READ_ONLY",
+    "workspace": "EPHEMERAL_COPY",
+    "tmp": "TMPFS",
+    "environment_inherited": false,
+    "cpu_limit_seconds": 30,
+    "memory_limit_bytes": 536870912,
+    "file_size_limit_bytes": 67108864,
+    "nofile_limit": 256
+  },
+  "persistent_effect": "NONE",
+  "staged_changes": [],
+  "stdout": "workspace=True\nhost_mnt=False\nnetwork=DENIED\n",
+  "stderr": "",
+  "stdout_sha256": "e5aa10978b1c80b7544f38b6c28c8f3481d212262db7c2cc054ffb4e8172bc81",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
