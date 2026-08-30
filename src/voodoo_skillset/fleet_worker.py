@@ -127,7 +127,7 @@ class IndependentFleetVerifier:
             checks["capabilities"] = (result.get("isolation") or {}).get("capabilities") == spec["capabilities"]
         if "stdout_contains" in spec:
             expected = spec["stdout_contains"]
-            if not isinstance(expected, list) or not all(isinstance(item, str) and item for item in expected):
+            if not isinstance(expected, list) or not expected or not all(isinstance(item, str) and item for item in expected):
                 raise ValueError("stdout_contains verification spec must be a non-empty string array")
             stdout = str(result.get("stdout", ""))
             for index, item in enumerate(expected):
@@ -197,16 +197,19 @@ def worker_main(argv=None) -> int:
     args = parser.parse_args(argv)
     worker = FleetWorker(DurableFleetStore(args.db), args.workspace_root, _secret(), args.worker_id)
     done = 0
+    failed = False
     while done < args.max_jobs:
         result = worker.run_once()
         print(json.dumps(result, sort_keys=True), flush=True)
         if result["status"] == "IDLE":
             break
+        if result["status"] == "FAILED":
+            failed = True
         done += 1
         if not args.drain:
             break
         time.sleep(0.02)
-    return 0 if all(True for _ in [0]) else 1
+    return 1 if failed else 0
 
 
 def verifier_main(argv=None) -> int:
@@ -220,6 +223,7 @@ def verifier_main(argv=None) -> int:
     verifier = IndependentFleetVerifier(DurableFleetStore(args.db), args.workspace_root, args.verifier_id)
     done = 0
     blocked = False
+    failed = False
     while done < args.max_jobs:
         result = verifier.run_once()
         print(json.dumps(result, sort_keys=True), flush=True)
@@ -228,11 +232,15 @@ def verifier_main(argv=None) -> int:
         if result["status"] == "BLOCKED":
             blocked = True
             break
+        if result["status"] == "FAILED":
+            failed = True
         done += 1
         if not args.drain:
             break
         time.sleep(0.02)
-    return 2 if blocked else 0
+    if blocked:
+        return 2
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
