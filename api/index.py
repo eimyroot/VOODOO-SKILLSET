@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from voodoo_skillset.api import App  # noqa: E402
+from voodoo_skillset.executor_bridge import ExecutorProtocolError  # noqa: E402
 
 _APP = App(ROOT)
 
@@ -35,6 +36,7 @@ class handler(BaseHTTPRequestHandler):
             "health": _APP.health,
             "capabilities": _APP.capabilities,
             "runtime": _APP.runtime_status,
+            "executor": _APP.executor_status,
             "runs": _APP.runs.list,
             "metrics": _APP.metrics.snapshot,
             "learning": _APP.learning_status,
@@ -46,15 +48,24 @@ class handler(BaseHTTPRequestHandler):
         return self._json(fn()) if fn else self._json({"error": "not found"}, 404)
 
     def do_POST(self):
-        if self._route() != "plan":
+        route = self._route()
+        if route not in {"plan", "executor/execute"}:
             return self._json({"error": "not found"}, 404)
         try:
             n = int(self.headers.get("Content-Length", "0"))
             if n > 131_072:
                 return self._json({"error": "request too large"}, 413)
             payload = json.loads(self.rfile.read(n) or b"{}")
-            if not isinstance(payload.get("goal"), str) or not payload["goal"].strip():
-                raise ValueError("goal is required")
-            return self._json(_APP.plan(payload))
+            if route == "plan":
+                if not isinstance(payload.get("goal"), str) or not payload["goal"].strip():
+                    raise ValueError("goal is required")
+                return self._json(_APP.plan(payload))
+            return self._json(_APP.execute_remote(payload, self.headers.get("Authorization", "")))
+        except PermissionError as exc:
+            return self._json({"error": str(exc)}, 403)
+        except ExecutorProtocolError as exc:
+            return self._json({"error": str(exc)}, 502)
+        except RuntimeError as exc:
+            return self._json({"error": str(exc)}, 503)
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
             return self._json({"error": str(exc)}, 400)

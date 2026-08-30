@@ -1,6 +1,6 @@
 [project]
 name = "voodoo-skillset"
-version = "0.3.0"
+version = "0.4.0"
 description = "Governed orchestration control plane for AI capabilities"
 requires-python = ">=3.12"
 dependencies = []
