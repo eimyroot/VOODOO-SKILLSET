@@ -1,1 +1,63 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>VOODOO / SKILLSET</title><link rel="stylesheet" href="/styles.css"></head><body><div class="shell"><aside><div class="brand"><span class="sigil">V</span><div><b>VOODOO</b><small>SKILLSET</small></div></div><nav><p>CONTROL</p><button class="active">Command</button><button>Runs</button><button>Plans</button><p>INTELLIGENCE</p><button>Capabilities</button><button>Learning</button><p>TRUST</p><button>Evidence</button><button>Verifier</button><button>Policies</button><p>SYSTEM</p><button>Runtime</button><button>Settings</button></nav><div class="rail-foot"><span class="dot"></span> fail-closed</div></aside><main><header><div><span class="eyebrow">AI OPERATIONS CONTROL PLANE</span><h1>Command Center</h1></div><div class="health"><span class="dot"></span><span id="health">RUNTIME CHECKING</span><select id="mode"><option>ALL</option><option>PRO</option><option>FAST</option><option>REDTEAM</option></select></div></header><section class="composer card"><label>MISSION GOAL</label><div class="compose-row"><textarea id="goal" rows="3">Audit the GitHub repository, review security, implement fixes, run tests, verify independently and prepare the web Control Room.</textarea><button id="planBtn">COMPILE PLAN</button></div><div class="hint">Goal → intent → capability routing → governed DAG → authority gates → verifier → evidence</div></section><section class="grid"><div class="card dag-card"><div class="card-head"><div><span class="eyebrow">ORCHESTRATION</span><h2>Dynamic DAG</h2></div><span id="planStatus" class="badge unknown">UNKNOWN</span></div><div id="dag" class="dag empty">Compile a plan to visualize execution stages.</div></div><div class="card inspector"><div class="card-head"><div><span class="eyebrow">TRUST</span><h2>Authority Gates</h2></div></div><div id="gates" class="stack"><div class="muted">No plan yet.</div></div></div></section><section class="metrics"><div class="metric"><span>CAPABILITIES</span><strong id="capCount">—</strong><small>registry</small></div><div class="metric"><span>SELECTED</span><strong id="selectedCount">—</strong><small>workers</small></div><div class="metric"><span>STAGES</span><strong id="stageCount">—</strong><small>DAG depth</small></div><div class="metric"><span>BLOCKERS</span><strong id="blockerCount">—</strong><small>fail-closed</small></div></section><section class="grid lower"><div class="card"><div class="card-head"><div><span class="eyebrow">EVIDENCE</span><h2>Decision Timeline</h2></div></div><div id="timeline" class="timeline"><div class="timeline-row"><span class="node"></span><div><b>Awaiting plan</b><small>Evidence is not inferred before execution.</small></div></div></div></div><div class="card"><div class="card-head"><div><span class="eyebrow">RUNTIME</span><h2>Capability Health</h2></div></div><div class="runtime-list"><div><span>GitHub connector</span><b class="ok">AVAILABLE</b></div><div><span>Filesystem write</span><b class="ok">AVAILABLE</b></div><div><span>Test runner</span><b class="ok">AVAILABLE</b></div><div><span>Independent verifier</span><b class="ok">REQUIRED</b></div><div><span>Production mutation</span><b class="warn">BLOCKED BY DEFAULT</b></div></div></div></section><footer>VOODOO-SKILLSET · PROJECT IDENTITY ≠ EXECUTION AUTHORITY · UNKNOWN ≠ PASS</footer></main></div><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07090c">
+  <title>VOODOO / SKILLSET</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><span class="sigil">V</span><div><b>VOODOO</b><small>SKILLSET</small></div></div>
+    <nav id="nav">
+      <p>CONTROL</p>
+      <button class="active" data-view="command">Command</button>
+      <button data-view="runs">Runs</button>
+      <button data-view="plans">Plans</button>
+      <p>INTELLIGENCE</p>
+      <button data-view="capabilities">Capabilities</button>
+      <button data-view="learning">Learning</button>
+      <p>TRUST</p>
+      <button data-view="evidence">Evidence</button>
+      <button data-view="verifier">Verifier</button>
+      <button data-view="policies">Policies</button>
+      <p>SYSTEM</p>
+      <button data-view="runtime">Runtime</button>
+      <button data-view="settings">Settings</button>
+    </nav>
+    <div class="rail-foot"><span class="dot"></span> fail-closed</div>
+  </aside>
+  <main>
+    <header>
+      <div><span class="eyebrow">AI OPERATIONS CONTROL PLANE</span><h1 id="pageTitle">Command Center</h1></div>
+      <div class="health"><span class="dot"></span><span id="health">RUNTIME CHECKING</span><select id="mode" aria-label="Orchestration mode"><option>ALL</option><option>PRO</option><option>FAST</option><option>REDTEAM</option></select></div>
+    </header>
+
+    <div class="view active" id="view-command">
+      <section class="composer card"><label for="goal">MISSION GOAL</label><div class="compose-row"><textarea id="goal" rows="3">Audit the GitHub repository, review security, implement fixes, run tests, verify independently and prepare the web Control Room.</textarea><button id="planBtn">COMPILE PLAN</button></div><div class="hint">Goal → intent → capability routing → governed DAG → authority gates → verifier → evidence</div></section>
+      <section class="grid"><div class="card dag-card"><div class="card-head"><div><span class="eyebrow">ORCHESTRATION</span><h2>Dynamic DAG</h2></div><span id="planStatus" class="badge unknown">UNKNOWN</span></div><div id="dag" class="dag empty">Compile a plan to visualize execution stages.</div></div>
+      <div class="card inspector"><div class="card-head"><div><span class="eyebrow">TRUST</span><h2>Authority Gates</h2></div></div><div id="gates" class="stack"><div class="muted">No plan yet.</div></div></div></section>
+      <section class="metrics"><div class="metric"><span>CAPABILITIES</span><strong id="capCount">—</strong><small>registry</small></div><div class="metric"><span>SELECTED</span><strong id="selectedCount">—</strong><small>workers</small></div><div class="metric"><span>STAGES</span><strong id="stageCount">—</strong><small>DAG depth</small></div><div class="metric"><span>BLOCKERS</span><strong id="blockerCount">—</strong><small>fail-closed</small></div></section>
+      <section class="grid lower"><div class="card"><div class="card-head"><div><span class="eyebrow">EVIDENCE</span><h2>Decision Timeline</h2></div></div><div id="timeline" class="timeline"><div class="timeline-row"><span class="node"></span><div><b>Awaiting plan</b><small>Evidence is not inferred before execution.</small></div></div></div></div>
+      <div class="card"><div class="card-head"><div><span class="eyebrow">RUNTIME</span><h2>Capability Health</h2></div></div><div id="runtimeSummary" class="runtime-list"><div><span>Loading runtime truth…</span><b class="warn">UNKNOWN</b></div></div></div></section>
+    </div>
+
+    <div class="view" id="view-runs"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">OPERATIONS</span><h2>Run Ledger</h2></div><button class="ghost" data-refresh="runs">REFRESH</button></div><div id="runsContent" class="data-grid"></div></section></div>
+    <div class="view" id="view-plans"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">CONTROL</span><h2>Plan History</h2></div></div><div id="plansContent" class="data-grid"></div></section></div>
+    <div class="view" id="view-capabilities"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">REGISTRY</span><h2>Capability Registry</h2></div><span class="badge verified">LEAST PRIVILEGE</span></div><div id="capabilitiesContent" class="cap-grid"></div></section></div>
+    <div class="view" id="view-learning"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">ROUTER</span><h2>Learning Intelligence</h2></div></div><div id="learningContent" class="data-grid"></div></section></div>
+    <div class="view" id="view-evidence"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">TRUST</span><h2>Hash-Chained Evidence</h2></div><span id="evidenceIntegrity" class="badge unknown">UNKNOWN</span></div><div id="evidenceContent" class="timeline"></div></section></div>
+    <div class="view" id="view-verifier"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">INDEPENDENCE</span><h2>Verifier Center</h2></div></div><div id="verifierContent" class="data-grid"></div></section></div>
+    <div class="view" id="view-policies"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">AUTHORITY</span><h2>Policy Gates</h2></div></div><div id="policiesContent"></div></section></div>
+    <div class="view" id="view-runtime"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">SYSTEM</span><h2>Runtime & Connector Health</h2></div></div><div id="runtimeContent" class="data-grid"></div></section></div>
+    <div class="view" id="view-settings"><section class="card page-card"><div class="card-head"><div><span class="eyebrow">GOVERNANCE</span><h2>Settings</h2></div></div><div id="settingsContent" class="data-grid"></div></section></div>
+
+    <footer>VOODOO-SKILLSET · PROJECT IDENTITY ≠ EXECUTION AUTHORITY · UNKNOWN ≠ PASS</footer>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
