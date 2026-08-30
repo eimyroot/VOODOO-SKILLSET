@@ -17,7 +17,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Compile
-        run: PYTHONPATH=src python -m compileall -q src tests
+        run: |
+          PYTHONPATH=src python -m compileall -q src tests
+          PYTHONPATH=src python -m py_compile api/index.py tools/production_verify.py
       - name: JavaScript syntax
         run: node --check web/app.js
       - name: Tests
