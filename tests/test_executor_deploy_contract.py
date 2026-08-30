@@ -23,10 +23,11 @@ class ExecutorDeployContractTests(unittest.TestCase):
 
     def test_r2_docs_state_docker_host_authority_and_ephemeral_ci_boundary(self):
         docs = (ROOT / "docs/EXECUTOR_R2.md").read_text(encoding="utf-8")
-        self.assertIn("Docker daemon access is host-level authority", docs)
-        self.assertIn("ephemeral verification node", docs)
-        self.assertIn("not the persistent production executor", docs)
-        self.assertIn("ExecutionReceipt != IndependentVerification", docs)
+        normalized = docs.replace("**", "")
+        self.assertIn("Docker daemon access is host-level authority", normalized)
+        self.assertIn("ephemeral verification node", normalized)
+        self.assertIn("not the persistent production executor", normalized)
+        self.assertIn("ExecutionReceipt != IndependentVerification", normalized)
 
 
 if __name__ == "__main__":
