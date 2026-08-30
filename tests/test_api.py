@@ -1,10 +1,12 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
 import urllib.request
 from pathlib import Path
 from http.server import ThreadingHTTPServer
+from unittest import mock
 
 from voodoo_skillset.api import App, handler_factory
 
@@ -15,7 +17,17 @@ class ApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.app = App(ROOT, state_dir=Path(cls.tmp.name) / "state")
+        fleet_db = str(Path(cls.tmp.name) / "fleet.sqlite3")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "VOODOO_FLEET_DB": fleet_db,
+                "VOODOO_FLEET_SUPABASE_URL": "",
+                "VOODOO_FLEET_SUPABASE_SERVICE_ROLE_KEY": "",
+            },
+            clear=False,
+        ):
+            cls.app = App(ROOT, state_dir=Path(cls.tmp.name) / "state")
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler_factory(cls.app))
         cls.port = cls.server.server_address[1]
         cls.t = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -37,6 +49,8 @@ class ApiTests(unittest.TestCase):
         data = json.loads(body)
         self.assertEqual(data["trust_model"], "fail-closed")
         self.assertEqual(data["version"], "0.6.0")
+        self.assertEqual(data["fleet"], "CONFIGURED")
+        self.assertEqual(data["fleet_backend"], "sqlite-durable-reference")
 
     def test_index(self):
         status, body, ctype = self.get("/")
