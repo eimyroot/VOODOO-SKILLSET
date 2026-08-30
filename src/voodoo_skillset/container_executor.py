@@ -7,11 +7,14 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from typing import Any
 
 from .execution import ExecutionEnvelope, LinuxNamespaceExecutor, _file_manifest, _sha256_text
 
-PINNED_IMAGE_RE = re.compile(r"^[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}$")
+PINNED_IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
+MAX_CAPTURE_BYTES = 4_194_304
 
 
 class DockerSandboxExecutor:
@@ -34,6 +37,10 @@ class DockerSandboxExecutor:
         if not PINNED_IMAGE_RE.fullmatch(image):
             raise ValueError("container image must be digest-pinned: name@sha256:<64 hex>")
 
+    @staticmethod
+    def _runtime_env() -> dict[str, str]:
+        return {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+
     def available(self) -> tuple[bool, str]:
         if not self.docker_path:
             return False, "docker executable not found"
@@ -52,7 +59,7 @@ class DockerSandboxExecutor:
                 text=True,
                 timeout=5,
                 check=False,
-                env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+                env=self._runtime_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return False, f"container capability probe failed: {exc}"
@@ -67,6 +74,11 @@ class DockerSandboxExecutor:
             raise ValueError("cwd must stay relative to staged workspace")
         return cwd
 
+    @staticmethod
+    def _container_name(operation_id: str) -> str:
+        safe = re.sub(r"[^a-z0-9_.-]+", "-", operation_id.lower()).strip("-.")
+        return ("voodoo-" + (safe or "operation"))[:63]
+
     def _command(self, staged: Path, cwd: Path, argv: tuple[str, ...], envelope: ExecutionEnvelope) -> list[str]:
         self.validate_image(self.image)
         uid = os.getuid() if hasattr(os, "getuid") else 65534
@@ -76,6 +88,7 @@ class DockerSandboxExecutor:
             self.docker_path,
             "run",
             "--rm",
+            f"--name={self._container_name(envelope.operation_id)}",
             "--pull=never",
             "--network=none",
             "--read-only",
@@ -86,6 +99,7 @@ class DockerSandboxExecutor:
             f"--memory-swap={envelope.memory_limit_bytes}",
             "--cpus=1.0",
             f"--ulimit=nofile={envelope.nofile_limit}:{envelope.nofile_limit}",
+            f"--ulimit=fsize={envelope.file_size_limit_bytes}:{envelope.file_size_limit_bytes}",
             "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=67108864",
             f"--user={uid}:{gid}",
             "--hostname=voodoo-sandbox",
@@ -96,6 +110,99 @@ class DockerSandboxExecutor:
             self.image,
             *argv,
         ]
+
+    def _force_remove(self, name: str) -> None:
+        try:
+            subprocess.run(
+                [self.docker_path, "rm", "-f", name],
+                shell=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+                env=self._runtime_env(),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def _run_bounded(self, command: list[str], name: str, timeout_seconds: int) -> tuple[int, str, str, str | None]:
+        proc = subprocess.Popen(
+            command,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self._runtime_env(),
+        )
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        overflow = threading.Event()
+        lock = threading.Lock()
+
+        def drain(pipe, key: str):
+            try:
+                while True:
+                    chunk = pipe.read(65_536)
+                    if not chunk:
+                        break
+                    with lock:
+                        remaining = MAX_CAPTURE_BYTES - len(buffers[key])
+                        if remaining > 0:
+                            buffers[key].extend(chunk[:remaining])
+                        if len(chunk) > remaining:
+                            overflow.set()
+                            break
+            finally:
+                pipe.close()
+
+        assert proc.stdout is not None and proc.stderr is not None
+        threads = [
+            threading.Thread(target=drain, args=(proc.stdout, "stdout"), daemon=True),
+            threading.Thread(target=drain, args=(proc.stderr, "stderr"), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+
+        deadline = time.monotonic() + timeout_seconds
+        termination: str | None = None
+        while proc.poll() is None:
+            if overflow.is_set():
+                termination = "output limit exceeded"
+                self._force_remove(name)
+                if proc.poll() is None:
+                    proc.kill()
+                break
+            if time.monotonic() >= deadline:
+                termination = "execution timeout"
+                self._force_remove(name)
+                if proc.poll() is None:
+                    proc.kill()
+                break
+            time.sleep(0.02)
+
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._force_remove(name)
+            proc.kill()
+            proc.wait(timeout=5)
+            termination = termination or "executor cleanup timeout"
+
+        for thread in threads:
+            thread.join(timeout=2)
+
+        if termination:
+            marker = ("\nVOODOO: " + termination + "\n").encode("utf-8")
+            with lock:
+                remaining = MAX_CAPTURE_BYTES - len(buffers["stderr"])
+                if remaining > 0:
+                    buffers["stderr"].extend(marker[:remaining])
+
+        stdout = bytes(buffers["stdout"]).decode("utf-8", errors="replace")
+        stderr = bytes(buffers["stderr"]).decode("utf-8", errors="replace")
+        if termination == "execution timeout":
+            return 124, stdout, stderr, termination
+        if termination:
+            return 125, stdout, stderr, termination
+        return int(proc.returncode or 0), stdout, stderr, None
 
     def execute(self, capability_id: str, payload: dict[str, Any], envelope: ExecutionEnvelope) -> dict[str, Any]:
         ok, reason = self.available()
@@ -117,17 +224,15 @@ class DockerSandboxExecutor:
         with tempfile.TemporaryDirectory(prefix="voodoo-container-") as tmp:
             staged = Path(tmp) / "stage"
             LinuxNamespaceExecutor._copy_workspace(target, staged)
+            staged_root = staged.resolve()
+            staged_cwd = (staged / cwd).resolve()
+            if staged_cwd != staged_root and staged_root not in staged_cwd.parents:
+                raise ValueError("cwd escaped staged workspace through symlink resolution")
+            if not staged_cwd.is_dir():
+                raise ValueError("cwd does not exist in staged workspace")
             command = self._command(staged, cwd, argv, envelope)
-            proc = subprocess.run(
-                command,
-                shell=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=envelope.timeout_seconds,
-                check=False,
-                env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-            )
+            name = self._container_name(envelope.operation_id)
+            exit_code, stdout, stderr, termination = self._run_bounded(command, name, envelope.timeout_seconds)
             staged_manifest = _file_manifest(staged)
 
         finished = datetime.now(timezone.utc)
@@ -136,12 +241,14 @@ class DockerSandboxExecutor:
             if source_manifest.get(key) != staged_manifest.get(key)
         )
         return {
-            "status": "EXECUTED" if proc.returncode == 0 else "FAILED",
+            "status": "EXECUTED" if exit_code == 0 else "FAILED",
             "verification_status": "UNKNOWN",
             "capability_id": capability_id,
             "operation_id": envelope.operation_id,
             "runner": self.backend_name,
             "container_image": self.image,
+            "termination_reason": termination,
+            "output_limit_bytes_per_stream": MAX_CAPTURE_BYTES,
             "isolation": {
                 "container": True,
                 "network_namespace": True,
@@ -154,14 +261,15 @@ class DockerSandboxExecutor:
                 "pids_limit": 128,
                 "cpu_limit": "1.0",
                 "memory_limit_bytes": envelope.memory_limit_bytes,
+                "file_size_limit_bytes": envelope.file_size_limit_bytes,
                 "nofile_limit": envelope.nofile_limit,
             },
             "argv": list(argv),
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "stdout_sha256": _sha256_text(proc.stdout),
-            "stderr_sha256": _sha256_text(proc.stderr),
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_sha256": _sha256_text(stdout),
+            "stderr_sha256": _sha256_text(stderr),
             "started_at": started.isoformat().replace("+00:00", "Z"),
             "finished_at": finished.isoformat().replace("+00:00", "Z"),
             "staged_changes": changed,
