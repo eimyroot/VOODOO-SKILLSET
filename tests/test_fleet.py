@@ -160,6 +160,30 @@ class FleetTests(unittest.TestCase):
             self.assertEqual(final["state"], "VERIFIED")
             self.assertEqual(final["verification"]["verifier_id"], "verifier-b")
 
+    def test_blocked_verification_is_durable_terminal_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = self.make_store(d)
+            job = self.prepare_job(store)
+            execution = store.claim_execution("worker-a")
+            store.complete_execution(
+                job["job_id"], "worker-a", execution.token, receipt(), receipt_signature_verified=True
+            )
+            verification = store.claim_verification("verifier-b")
+            self.assertIsNotNone(verification)
+            final = store.complete_verification(
+                job["job_id"],
+                "verifier-b",
+                verification.token,
+                "BLOCKED",
+                {"checks": {}, "reason": "independent evidence missing"},
+            )
+            self.assertEqual(final["state"], "BLOCKED")
+            self.assertEqual(final["verification"]["verdict"], "BLOCKED")
+            self.assertEqual(final["last_error"], "independent verification blocked")
+            self.assertIsNone(store.claim_verification("verifier-c"))
+            ok, reason = store.verify_event_chain()
+            self.assertTrue(ok, reason)
+
     def test_failed_execution_retries_then_stops(self):
         with tempfile.TemporaryDirectory() as d:
             store = self.make_store(d)
