@@ -17,12 +17,27 @@ PY
 
 docker run -d --name voodoo-pg \
   -e POSTGRES_PASSWORD=postgres \
-  -p 127.0.0.1:55432:5432 \
   "$PG_IMAGE" >/tmp/pg-container-id
-for _ in $(seq 1 60); do
-  if docker exec voodoo-pg pg_isready -U postgres >/dev/null 2>&1; then break; fi
-  sleep 0.25
+
+READY=0
+for _ in $(seq 1 120); do
+  RUNNING="$(docker inspect -f '{{.State.Running}}' voodoo-pg 2>/dev/null || echo false)"
+  if [ "$RUNNING" != "true" ]; then
+    echo 'FAIL: PostgreSQL container exited during startup'
+    docker logs voodoo-pg || true
+    exit 1
+  fi
+  if docker exec voodoo-pg pg_isready -U postgres >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+  sleep 0.5
 done
+if [ "$READY" != "1" ]; then
+  echo 'FAIL: PostgreSQL did not become ready'
+  docker logs voodoo-pg || true
+  exit 1
+fi
 docker exec voodoo-pg pg_isready -U postgres
 
 # Supabase service_role is a privileged server role that bypasses RLS. The test
