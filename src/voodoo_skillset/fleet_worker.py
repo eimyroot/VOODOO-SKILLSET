@@ -11,12 +11,13 @@ from typing import Any
 from .container_executor import configured_executor_adapter
 from .executor_bridge import ExecutorService, ExecutionRequest, sign_payload, verify_signature
 from .fleet import DurableFleetStore, workspace_manifest_digest
+from .fleet_client import FleetCoordinatorClient
 
 
 class FleetWorker:
     def __init__(
         self,
-        store: DurableFleetStore,
+        store,
         workspace_root: str | Path,
         shared_secret: str,
         worker_id: str,
@@ -51,25 +52,35 @@ class FleetWorker:
             value = request.to_dict()
             response = self.service.execute_signed(value, sign_payload(value, self.shared_secret))
             receipt = response["receipt"]
-            signature_ok = verify_signature(receipt, response["signature"], self.shared_secret)
-            final = self.store.complete_execution(
-                lease.job_id,
-                self.worker_id,
-                lease.token,
-                receipt,
-                receipt_signature_verified=signature_ok,
-            )
+            receipt_signature = response["signature"]
+            if hasattr(self.store, "complete_execution_signed"):
+                final = self.store.complete_execution_signed(
+                    lease.job_id,
+                    self.worker_id,
+                    lease.token,
+                    receipt,
+                    receipt_signature,
+                )
+            else:
+                signature_ok = verify_signature(receipt, receipt_signature, self.shared_secret)
+                final = self.store.complete_execution(
+                    lease.job_id,
+                    self.worker_id,
+                    lease.token,
+                    receipt,
+                    receipt_signature_verified=signature_ok,
+                )
             return {
                 "status": "EXECUTED",
                 "worker_id": self.worker_id,
                 "job_id": lease.job_id,
-                "receipt_sha256": final["receipt_sha256"],
+                "receipt_sha256": final.get("receipt_sha256"),
                 "verification_status": receipt["verification_status"],
             }
         except Exception as exc:
             try:
                 failed = self.store.fail_execution(lease.job_id, self.worker_id, lease.token, str(exc))
-                state = failed["state"]
+                state = failed.get("state", "UNKNOWN")
             except Exception:
                 state = "LEASE_UNCERTAIN"
             return {
@@ -84,7 +95,7 @@ class FleetWorker:
 class IndependentFleetVerifier:
     """Verifier process intentionally separate from the executor worker identity."""
 
-    def __init__(self, store: DurableFleetStore, workspace_root: str | Path, verifier_id: str):
+    def __init__(self, store, workspace_root: str | Path, verifier_id: str):
         self.store = store
         self.workspace_root = Path(workspace_root).resolve()
         self.verifier_id = verifier_id
@@ -168,15 +179,32 @@ class IndependentFleetVerifier:
                 "verifier_id": self.verifier_id,
                 "job_id": lease.job_id,
                 "checks": checks,
-                "queue_state": final["state"],
+                "queue_state": final.get("state", verdict),
             }
         except Exception as exc:
+            proof = {
+                "checks": {},
+                "observed": {},
+                "method": "independent-fleet-verifier-v1",
+                "reason": str(exc),
+            }
+            try:
+                final = self.store.complete_verification(
+                    lease.job_id,
+                    self.verifier_id,
+                    lease.token,
+                    "BLOCKED",
+                    proof,
+                )
+                queue_state = final.get("state", "BLOCKED")
+            except Exception:
+                queue_state = "VERIFYING_UNTIL_LEASE_EXPIRY"
             return {
                 "status": "BLOCKED",
                 "verifier_id": self.verifier_id,
                 "job_id": lease.job_id,
                 "error": str(exc),
-                "queue_state": "VERIFYING_UNTIL_LEASE_EXPIRY",
+                "queue_state": queue_state,
             }
 
 
@@ -187,15 +215,29 @@ def _secret() -> str:
     return secret
 
 
+def _coordinator_store(url: str, token_env: str):
+    token = os.environ.get(token_env, "")
+    if len(token) < 16:
+        raise SystemExit(f"{token_env} must contain at least 16 characters")
+    return FleetCoordinatorClient(url, token)
+
+
+def _add_store_args(parser: argparse.ArgumentParser):
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--db")
+    group.add_argument("--coordinator-url")
+
+
 def worker_main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="voodoo-fleet-worker")
-    parser.add_argument("--db", required=True)
+    _add_store_args(parser)
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--worker-id", required=True)
     parser.add_argument("--drain", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=100)
     args = parser.parse_args(argv)
-    worker = FleetWorker(DurableFleetStore(args.db), args.workspace_root, _secret(), args.worker_id)
+    store = DurableFleetStore(args.db) if args.db else _coordinator_store(args.coordinator_url, "VOODOO_FLEET_WORKER_TOKEN")
+    worker = FleetWorker(store, args.workspace_root, _secret(), args.worker_id)
     done = 0
     failed = False
     while done < args.max_jobs:
@@ -214,13 +256,14 @@ def worker_main(argv=None) -> int:
 
 def verifier_main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="voodoo-fleet-verifier")
-    parser.add_argument("--db", required=True)
+    _add_store_args(parser)
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--verifier-id", required=True)
     parser.add_argument("--drain", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=100)
     args = parser.parse_args(argv)
-    verifier = IndependentFleetVerifier(DurableFleetStore(args.db), args.workspace_root, args.verifier_id)
+    store = DurableFleetStore(args.db) if args.db else _coordinator_store(args.coordinator_url, "VOODOO_FLEET_VERIFIER_TOKEN")
+    verifier = IndependentFleetVerifier(store, args.workspace_root, args.verifier_id)
     done = 0
     blocked = False
     failed = False
