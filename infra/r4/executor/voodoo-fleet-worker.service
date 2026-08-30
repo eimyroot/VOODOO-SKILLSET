@@ -1,0 +1,30 @@
+[Unit]
+Description=VOODOO CASTER-MINAL Fleet Worker
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=voodoo-worker
+Group=voodoo-worker
+# Conventional Docker group is host-level authority. Use only on a dedicated executor host.
+SupplementaryGroups=docker
+WorkingDirectory=/opt/voodoo-skillset
+EnvironmentFile=/etc/voodoo-skillset/worker.env
+ExecStart=/opt/voodoo-skillset/.venv/bin/voodoo-fleet-worker --coordinator-url=https://voodoo-skillset-voodoo-caser.vercel.app --workspace-root=/srv/voodoo/workspaces --worker-id=%H:worker --forever --poll-seconds=1 --lease-seconds=90
+Restart=always
+RestartSec=2
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/voodoo/workspaces
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
