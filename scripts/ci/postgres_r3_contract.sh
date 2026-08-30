@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cleanup() {
+  docker rm -f voodoo-pg >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker pull --quiet postgres:17
+PG_IMAGE="$(docker image inspect postgres:17 --format '{{index .RepoDigests 0}}')"
+python3 - "$PG_IMAGE" <<'PY'
+import re,sys
+image=sys.argv[1]
+assert re.fullmatch(r'[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}', image), image
+print('POSTGRES_IMAGE='+image)
+PY
+
+docker run -d --name voodoo-pg \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 127.0.0.1:55432:5432 \
+  "$PG_IMAGE" >/tmp/pg-container-id
+for _ in $(seq 1 60); do
+  if docker exec voodoo-pg pg_isready -U postgres >/dev/null 2>&1; then break; fi
+  sleep 0.25
+done
+docker exec voodoo-pg pg_isready -U postgres
+
+# Supabase service_role is a privileged server role that bypasses RLS. The test
+# harness reproduces that property; anon/authenticated intentionally do not.
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+create role service_role bypassrls noinherit;
+create role anon noinherit;
+create role authenticated noinherit;
+SQL
+
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet.sql
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet_privileges.sql
+
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+set role service_role;
+select public.voodoo_record_plan('{"plan_id":"PLAN-PG","status":"VERIFIED_PLAN","goal":"r3 postgres","mode":"ALL"}'::jsonb);
+select public.voodoo_enqueue_job(
+  'PLAN-PG','demo','test-engineer','["python3","-c","print(1)"]'::jsonb,'.',
+  '{"expected_exit_code":0}'::jsonb,null,100,3,'JOB-PG-1'
+);
+select public.voodoo_enqueue_job(
+  'PLAN-PG','demo','test-engineer','["python3","-c","print(2)"]'::jsonb,'.',
+  '{"expected_exit_code":0}'::jsonb,null,100,3,'JOB-PG-2'
+);
+SQL
+
+docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role service_role; select public.voodoo_claim_execution('worker-a',30)::text;" \
+  >/tmp/claim-a.json &
+A_PID=$!
+docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role service_role; select public.voodoo_claim_execution('worker-b',30)::text;" \
+  >/tmp/claim-b.json &
+B_PID=$!
+wait "$A_PID" "$B_PID"
+
+cat /tmp/claim-a.json
+cat /tmp/claim-b.json
+python3 - <<'PY'
+import json
+a=json.loads(open('/tmp/claim-a.json').read())
+b=json.loads(open('/tmp/claim-b.json').read())
+assert a['job_id'] != b['job_id'], (a,b)
+assert {a['job_id'],b['job_id']} == {'JOB-PG-1','JOB-PG-2'}, (a,b)
+assert a['lease_token'] and b['lease_token'] and a['lease_token'] != b['lease_token']
+assert 'execution_lease_hash' not in a and 'execution_lease_hash' not in b
+print('POSTGRES_ATOMIC_CLAIMS=PASS')
+PY
+
+# Client roles must not bypass the server-side coordinator boundary.
+if docker exec voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role anon; select count(*) from public.voodoo_jobs;" >/tmp/anon.out 2>/tmp/anon.err; then
+  echo 'FAIL: anon unexpectedly read voodoo_jobs'
+  cat /tmp/anon.out
+  exit 1
+fi
+grep -Ei 'permission denied|privilege' /tmp/anon.err >/dev/null
+
+if docker exec voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role authenticated; select public.voodoo_claim_execution('rogue-client',30);" >/tmp/auth.out 2>/tmp/auth.err; then
+  echo 'FAIL: authenticated role unexpectedly executed fleet claim RPC'
+  cat /tmp/auth.out
+  exit 1
+fi
+grep -Ei 'permission denied|privilege' /tmp/auth.err >/dev/null
+
+docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role service_role; select public.voodoo_verify_event_chain()::text;" >/tmp/chain.json
+cat /tmp/chain.json
+python3 - <<'PY'
+import json
+d=json.loads(open('/tmp/chain.json').read())
+assert d['ok'] is True,d
+assert d['event_count'] >= 5,d
+print('POSTGRES_EVENT_CHAIN=PASS')
+PY
+
+echo 'R3_POSTGRES_CONTRACT=PASS'
