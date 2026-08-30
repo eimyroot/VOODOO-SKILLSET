@@ -19,7 +19,10 @@ docker run -d --name voodoo-pg \
   -e POSTGRES_PASSWORD=postgres \
   "$PG_IMAGE" >/tmp/pg-container-id
 
+# Socket readiness can flap while PostgreSQL is still completing startup. Require
+# two consecutive real SQL round trips before applying the production contract.
 READY=0
+STABLE=0
 for _ in $(seq 1 120); do
   RUNNING="$(docker inspect -f '{{.State.Running}}' voodoo-pg 2>/dev/null || echo false)"
   if [ "$RUNNING" != "true" ]; then
@@ -27,18 +30,26 @@ for _ in $(seq 1 120); do
     docker logs voodoo-pg || true
     exit 1
   fi
-  if docker exec voodoo-pg pg_isready -U postgres >/dev/null 2>&1; then
-    READY=1
-    break
+  if [ "$(docker exec voodoo-pg psql -X -qAt -U postgres -d postgres -c 'select 1' 2>/dev/null || true)" = "1" ]; then
+    STABLE=$((STABLE + 1))
+    if [ "$STABLE" -ge 2 ]; then
+      READY=1
+      break
+    fi
+  else
+    STABLE=0
   fi
   sleep 0.5
 done
 if [ "$READY" != "1" ]; then
-  echo 'FAIL: PostgreSQL did not become ready'
+  echo 'FAIL: PostgreSQL did not sustain two SQL readiness probes'
+  docker inspect voodoo-pg || true
   docker logs voodoo-pg || true
   exit 1
 fi
-docker exec voodoo-pg pg_isready -U postgres
+SQL_PROBE="$(docker exec voodoo-pg psql -X -qAt -U postgres -d postgres -c 'select 1')"
+test "$SQL_PROBE" = "1"
+echo 'POSTGRES_SQL_READY=PASS'
 
 # Supabase service_role is a privileged server role that bypasses RLS. The test
 # harness reproduces that property; anon/authenticated intentionally do not.
