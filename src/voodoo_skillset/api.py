@@ -326,10 +326,10 @@ def handler_factory(app: App):
                 return self._json(app.execute_remote(payload, self.headers.get("Authorization", "")))
             except PermissionError as exc:
                 return self._json({"error": str(exc)}, 403)
-            except RuntimeError as exc:
-                return self._json({"error": str(exc)}, 503)
             except ExecutorProtocolError as exc:
                 return self._json({"error": str(exc)}, 502)
+            except RuntimeError as exc:
+                return self._json({"error": str(exc)}, 503)
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 return self._json({"error": str(exc)}, 400)
 
