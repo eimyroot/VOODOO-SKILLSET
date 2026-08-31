@@ -62,11 +62,12 @@ SQL
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet.sql
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet_privileges.sql
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260831_r4_fleet_security_hardening.sql
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260831_r4_pgcrypto_schema_parity.sql
 
-# Every fleet function must pin search_path. Mutable search paths are a production
-# security warning, and are unsafe for SECURITY DEFINER RPCs.
+# Every fleet function must pin a hosted-Supabase-compatible search_path. The trusted
+# extensions schema is required because hosted Supabase installs pgcrypto there.
 MUTABLE_PATHS="$(docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -c \
-  "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'voodoo_%' and not exists (select 1 from unnest(coalesce(p.proconfig,'{}'::text[])) cfg where cfg='search_path=pg_catalog, public');")"
+  "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'voodoo_%' and not exists (select 1 from unnest(coalesce(p.proconfig,'{}'::text[])) cfg where cfg='search_path=pg_catalog, public, extensions');")"
 test "$MUTABLE_PATHS" = "0"
 echo 'POSTGRES_FIXED_SEARCH_PATH=PASS'
 
