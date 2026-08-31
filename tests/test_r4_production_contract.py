@@ -69,6 +69,11 @@ class R4ProductionContractTests(unittest.TestCase):
         self.assertIn("hosted Supabase", migration)
         self.assertIn("pgcrypto", migration)
 
+    def test_plan_foreign_key_has_covering_index_migration(self):
+        migration = (ROOT / "supabase/migrations/20260831_r4_plan_fk_index.sql").read_text(encoding="utf-8")
+        self.assertIn("create index if not exists voodoo_jobs_plan_id_idx", migration)
+        self.assertIn("on public.voodoo_jobs(plan_id)", migration)
+
 
 if __name__ == "__main__":
     unittest.main()
