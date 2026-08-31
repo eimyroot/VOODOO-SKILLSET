@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 — 2026-08-30
+- Added production R4 infrastructure contracts for GitHub governance, Vercel server-side secrets and persistent worker/verifier services.
+- Added execution-lease heartbeat during long-running sandbox jobs; lease ownership uncertainty withholds successful completion fail-closed.
+- Added persistent `--forever` worker/verifier loops with bounded polling and graceful SIGTERM/SIGINT shutdown.
+- Fixed the Vercel Python wrapper to expose all durable fleet coordinator routes added in R3.
+- Added exact deployment provenance through `VOODOO_CANONICAL_SHA` / `VERCEL_GIT_COMMIT_SHA` and `X-Canonical-SHA`.
+- Added real Docker/runc long-job heartbeat CI proof.
+- Added an active `main` ruleset payload requiring squash PRs, strict Python 3.12/3.13 checks, resolved review threads, signed commits, linear history and force-push/delete protection.
+- Production provisioning remains fail-closed until a dedicated Supabase project, explicit Vercel project identity and persistent Linux host authority are available.
+
+## 0.6.0 — 2026-08-30
+- Added durable executor fleet state with atomic execution leases, retry budgets, verifier leases and hash-chained events.
+- Added SQLite durable reference backend and Supabase/Postgres production schema using `FOR UPDATE SKIP LOCKED`.
+- Added separate CONTROL / WORKER / VERIFIER bearer boundaries; database service-role credentials remain Control Plane only.
+- Added database-secret-free coordinator clients for worker/verifier nodes.
+- Added real two-worker Docker/runc fleet proof and independent verifier proof against the durable coordinator model.
+- Added durable `BLOCKED` verification semantics and Control Room fleet truth view.
+
 ## 0.5.0 — 2026-08-30
 - Added a real digest-pinned Docker/runc COMPUTE sandbox for executor hosts where unprivileged Linux namespaces are unavailable.
 - Added `voodoo-executor` node entrypoint with fail-closed `auto | namespace | container` backend selection.

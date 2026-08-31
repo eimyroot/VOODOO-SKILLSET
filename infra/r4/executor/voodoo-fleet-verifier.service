@@ -1,0 +1,28 @@
+[Unit]
+Description=VOODOO Independent Fleet Verifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=voodoo-verifier
+Group=voodoo-verifier
+WorkingDirectory=/opt/voodoo-skillset
+EnvironmentFile=/etc/voodoo-skillset/verifier.env
+ExecStart=/opt/voodoo-skillset/.venv/bin/voodoo-fleet-verifier --coordinator-url=https://voodoo-skillset-voodoo-caser.vercel.app --workspace-root=/srv/voodoo/workspaces --verifier-id=%H:verifier --forever --poll-seconds=1
+Restart=always
+RestartSec=2
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/voodoo/workspaces
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

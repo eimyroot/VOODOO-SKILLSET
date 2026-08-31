@@ -19,8 +19,6 @@ docker run -d --name voodoo-pg \
   -e POSTGRES_PASSWORD=postgres \
   "$PG_IMAGE" >/tmp/pg-container-id
 
-# Socket readiness can flap while PostgreSQL is still completing startup. Require
-# two consecutive real SQL round trips before applying the production contract.
 READY=0
 STABLE=0
 for _ in $(seq 1 120); do
@@ -51,8 +49,6 @@ SQL_PROBE="$(docker exec voodoo-pg psql -X -qAt -U postgres -d postgres -c 'sele
 test "$SQL_PROBE" = "1"
 echo 'POSTGRES_SQL_READY=PASS'
 
-# Supabase service_role is a privileged server role that bypasses RLS. The test
-# harness reproduces that property; anon/authenticated intentionally do not.
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 create role service_role bypassrls noinherit;
 create role anon noinherit;
@@ -61,10 +57,23 @@ SQL
 
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet.sql
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260830_r3_executor_fleet_privileges.sql
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260831_r4_fleet_security_hardening.sql
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260831_r4_pgcrypto_schema_parity.sql
+docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres < supabase/migrations/20260831_r4_plan_fk_index.sql
+
+MUTABLE_PATHS="$(docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -c \
+  "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'voodoo_%' and not exists (select 1 from unnest(coalesce(p.proconfig,'{}'::text[])) cfg where cfg='search_path=pg_catalog, public, extensions');")"
+test "$MUTABLE_PATHS" = "0"
+echo 'POSTGRES_FIXED_SEARCH_PATH=PASS'
+
+PLAN_INDEX="$(docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -c \
+  "select count(*) from pg_indexes where schemaname='public' and tablename='voodoo_jobs' and indexname='voodoo_jobs_plan_id_idx' and indexdef ~ '\\(plan_id\\)';")"
+test "$PLAN_INDEX" = "1"
+echo 'POSTGRES_PLAN_FK_INDEX=PASS'
 
 docker exec -i voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 set role service_role;
-select public.voodoo_record_plan('{"plan_id":"PLAN-PG","status":"VERIFIED_PLAN","goal":"r3 postgres","mode":"ALL"}'::jsonb);
+select public.voodoo_record_plan('{"plan_id":"PLAN-PG","status":"VERIFIED_PLAN","goal":"r4 postgres","mode":"ALL"}'::jsonb);
 select public.voodoo_enqueue_job(
   'PLAN-PG','demo','test-engineer','["python3","-c","print(1)"]'::jsonb,'.',
   '{"expected_exit_code":0}'::jsonb,null,100,3,'JOB-PG-1'
@@ -74,6 +83,24 @@ select public.voodoo_enqueue_job(
   '{"expected_exit_code":0}'::jsonb,null,100,3,'JOB-PG-2'
 );
 SQL
+
+if docker exec voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role service_role; update public.voodoo_jobs set priority=999 where job_id='JOB-PG-1';" >/tmp/direct-write.out 2>/tmp/direct-write.err; then
+  echo 'FAIL: service_role unexpectedly updated voodoo_jobs directly'
+  cat /tmp/direct-write.out
+  exit 1
+fi
+grep -Ei 'permission denied|privilege' /tmp/direct-write.err >/dev/null
+
+if docker exec voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres \
+  -c "set role service_role; delete from public.voodoo_fleet_events;" >/tmp/direct-delete.out 2>/tmp/direct-delete.err; then
+  echo 'FAIL: service_role unexpectedly deleted append-only fleet events'
+  cat /tmp/direct-delete.out
+  exit 1
+fi
+grep -Ei 'permission denied|privilege' /tmp/direct-delete.err >/dev/null
+
+echo 'POSTGRES_GOVERNED_MUTATION_ONLY=PASS'
 
 docker exec voodoo-pg psql -X -qAt -v ON_ERROR_STOP=1 -U postgres \
   -c "set role service_role; select public.voodoo_claim_execution('worker-a',30)::text;" \
@@ -98,7 +125,6 @@ assert 'execution_lease_hash' not in a and 'execution_lease_hash' not in b
 print('POSTGRES_ATOMIC_CLAIMS=PASS')
 PY
 
-# Client roles must not bypass the server-side coordinator boundary.
 if docker exec voodoo-pg psql -v ON_ERROR_STOP=1 -U postgres \
   -c "set role anon; select count(*) from public.voodoo_jobs;" >/tmp/anon.out 2>/tmp/anon.err; then
   echo 'FAIL: anon unexpectedly read voodoo_jobs'
@@ -126,4 +152,4 @@ assert d['event_count'] >= 5,d
 print('POSTGRES_EVENT_CHAIN=PASS')
 PY
 
-echo 'R3_POSTGRES_CONTRACT=PASS'
+echo 'R4_POSTGRES_SECURITY_CONTRACT=PASS'

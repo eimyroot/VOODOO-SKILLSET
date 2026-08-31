@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -11,8 +12,21 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from voodoo_skillset.api import App  # noqa: E402
 from voodoo_skillset.executor_bridge import ExecutorProtocolError  # noqa: E402
+from voodoo_skillset.fleet_supabase import SupabaseFleetError  # noqa: E402
 
 _APP = App(ROOT)
+
+
+def _canonical_sha() -> str | None:
+    value = os.environ.get("VOODOO_CANONICAL_SHA", "").strip() or os.environ.get("VERCEL_GIT_COMMIT_SHA", "").strip()
+    return value if len(value) == 40 else None
+
+
+def _health():
+    value = _APP.health()
+    value["canonical_sha"] = _canonical_sha()
+    value["canonical_sha_source"] = "VOODOO_CANONICAL_SHA" if os.environ.get("VOODOO_CANONICAL_SHA", "").strip() else ("VERCEL_GIT_COMMIT_SHA" if _canonical_sha() else None)
+    return value
 
 
 class handler(BaseHTTPRequestHandler):
@@ -22,6 +36,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        canonical = _canonical_sha()
+        if canonical:
+            self.send_header("X-Canonical-SHA", canonical)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -33,10 +50,12 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = self._route()
         endpoints = {
-            "health": _APP.health,
+            "health": _health,
             "capabilities": _APP.capabilities,
             "runtime": _APP.runtime_status,
             "executor": _APP.executor_status,
+            "fleet": _APP.fleet_status,
+            "fleet/events": _APP.fleet_events,
             "runs": _APP.runs.list,
             "metrics": _APP.metrics.snapshot,
             "learning": _APP.learning_status,
@@ -45,27 +64,43 @@ class handler(BaseHTTPRequestHandler):
             "policies": _APP.policy_status,
         }
         fn = endpoints.get(route)
-        return self._json(fn()) if fn else self._json({"error": "not found"}, 404)
+        if not fn:
+            return self._json({"error": "not found"}, 404)
+        try:
+            return self._json(fn())
+        except (RuntimeError, SupabaseFleetError) as exc:
+            return self._json({"error": str(exc)}, 503)
 
     def do_POST(self):
         route = self._route()
-        if route not in {"plan", "executor/execute"}:
+        routes = {
+            "plan": lambda payload: _APP.plan(payload),
+            "executor/execute": lambda payload: _APP.execute_remote(payload, self.headers.get("Authorization", "")),
+            "fleet/jobs": lambda payload: _APP.enqueue_fleet_job(payload, self.headers.get("Authorization", "")),
+            "fleet/claim": lambda payload: _APP.fleet_claim_execution(payload, self.headers.get("Authorization", "")),
+            "fleet/heartbeat": lambda payload: _APP.fleet_heartbeat_execution(payload, self.headers.get("Authorization", "")),
+            "fleet/complete": lambda payload: _APP.fleet_complete_execution(payload, self.headers.get("Authorization", "")),
+            "fleet/fail": lambda payload: _APP.fleet_fail_execution(payload, self.headers.get("Authorization", "")),
+            "fleet/verify/claim": lambda payload: _APP.fleet_claim_verification(payload, self.headers.get("Authorization", "")),
+            "fleet/verify/complete": lambda payload: _APP.fleet_complete_verification(payload, self.headers.get("Authorization", "")),
+        }
+        if route not in routes:
             return self._json({"error": "not found"}, 404)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if n > 131_072:
+            if n > 2_097_152:
                 return self._json({"error": "request too large"}, 413)
             payload = json.loads(self.rfile.read(n) or b"{}")
-            if route == "plan":
-                if not isinstance(payload.get("goal"), str) or not payload["goal"].strip():
-                    raise ValueError("goal is required")
-                return self._json(_APP.plan(payload))
-            return self._json(_APP.execute_remote(payload, self.headers.get("Authorization", "")))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON object required")
+            if route == "plan" and (not isinstance(payload.get("goal"), str) or not payload["goal"].strip()):
+                raise ValueError("goal is required")
+            return self._json(routes[route](payload))
         except PermissionError as exc:
             return self._json({"error": str(exc)}, 403)
         except ExecutorProtocolError as exc:
             return self._json({"error": str(exc)}, 502)
-        except RuntimeError as exc:
+        except (RuntimeError, SupabaseFleetError) as exc:
             return self._json({"error": str(exc)}, 503)
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
             return self._json({"error": str(exc)}, 400)
