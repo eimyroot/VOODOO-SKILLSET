@@ -2,7 +2,7 @@ name: fleet-r3-live
 
 on:
   push:
-    branches: ["feat/r3-executor-fleet"]
+    branches: ["feat/r3-executor-fleet", "feat/r4-production-infrastructure"]
   workflow_dispatch:
 
 permissions:
