@@ -63,6 +63,12 @@ class R4ProductionContractTests(unittest.TestCase):
         self.assertIn("revoke execute on function public.voodoo_append_event(text,text,text,jsonb,timestamptz) from service_role;", migration)
         self.assertIn("revoke all on sequence public.voodoo_fleet_events_seq_seq from service_role;", migration)
 
+    def test_hosted_supabase_pgcrypto_schema_is_in_fixed_path(self):
+        migration = (ROOT / "supabase/migrations/20260831_r4_pgcrypto_schema_parity.sql").read_text(encoding="utf-8")
+        self.assertEqual(migration.count("set search_path = pg_catalog, public, extensions;"), 14)
+        self.assertIn("hosted Supabase", migration)
+        self.assertIn("pgcrypto", migration)
+
 
 if __name__ == "__main__":
     unittest.main()
