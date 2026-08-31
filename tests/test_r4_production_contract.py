@@ -53,6 +53,16 @@ class R4ProductionContractTests(unittest.TestCase):
         self.assertNotIn("SupplementaryGroups=docker", verifier)
         self.assertIn("ReadOnlyPaths=/srv/voodoo/workspaces", verifier)
 
+    def test_supabase_security_hardening_is_least_privilege(self):
+        migration = (ROOT / "supabase/migrations/20260831_r4_fleet_security_hardening.sql").read_text(encoding="utf-8")
+        self.assertEqual(migration.count("set search_path = pg_catalog, public;"), 14)
+        for table in ["voodoo_plans", "voodoo_jobs", "voodoo_fleet_events"]:
+            self.assertIn(f"revoke insert, update, delete on table public.{table} from service_role;", migration)
+            self.assertIn(f"grant select on table public.{table} to service_role;", migration)
+        self.assertIn("alter function public.voodoo_append_event(text,text,text,jsonb,timestamptz) security definer;", migration)
+        self.assertIn("revoke execute on function public.voodoo_append_event(text,text,text,jsonb,timestamptz) from service_role;", migration)
+        self.assertIn("revoke all on sequence public.voodoo_fleet_events_seq_seq from service_role;", migration)
+
 
 if __name__ == "__main__":
     unittest.main()
