@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 — 2026-09-01
+- Added a branded VOODOO-SKILLSET repository banner and rebuilt the main README as an English-first product front page.
+- Added a one-command zero-build cockpit launcher through `make cockpit` / `scripts/cockpit.sh`.
+- Added executable cockpit HTTP smoke verification to CI on Python 3.12 and 3.13.
+- Added repository contract tests covering the banner, cockpit entrypoint, Vercel routing and generated-state hygiene.
+- Hardened `.gitignore` for local secrets, databases, build artifacts and editor/platform state; added `.editorconfig`.
+- Added root contribution and vulnerability-reporting contracts.
+- Replaced stale v0.2 architecture documentation with the canonical v0.7 isolation, durable fleet, verifier and evidence model.
+- Added a repository/scaffold hygiene audit with explicit non-blocking limitations for licensing, GitHub metadata and production provisioning.
+- No executor, fleet, authority-gate or verification semantics were weakened or broadened in this release-polish patch.
+
 ## 0.7.0 — 2026-08-30
 - Added production R4 infrastructure contracts for GitHub governance, Vercel server-side secrets and persistent worker/verifier services.
 - Added execution-lease heartbeat during long-running sandbox jobs; lease ownership uncertainty withholds successful completion fail-closed.

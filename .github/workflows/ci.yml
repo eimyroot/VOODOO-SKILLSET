@@ -20,6 +20,7 @@ jobs:
         run: |
           PYTHONPATH=src python -m compileall -q src tests
           PYTHONPATH=src python -m py_compile api/index.py tools/production_verify.py
+          bash -n scripts/cockpit.sh
       - name: JavaScript syntax
         run: node --check web/app.js
       - name: Tests
@@ -29,3 +30,25 @@ jobs:
           PYTHONPATH=src python -m voodoo_skillset.cli plan "audit github repository security implement fixes test verify" --mode ALL --connector github --tool filesystem-write --tool test-runner --tool isolated-runner --tool web-search --out /tmp/plan.json --evidence /tmp/evidence.json
           PYTHONPATH=src python -m voodoo_skillset.cli verify-plan /tmp/plan.json --require-verifier
           PYTHONPATH=src python -m voodoo_skillset.cli verify-evidence /tmp/evidence.json
+      - name: Cockpit HTTP smoke
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python -m voodoo_skillset.cli serve --host 127.0.0.1 --port 8787 > /tmp/voodoo-cockpit.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8787/api/health > /tmp/health.json; then
+              break
+            fi
+            sleep 0.2
+          done
+          curl --fail --silent http://127.0.0.1:8787/ > /tmp/cockpit.html
+          grep -q 'VOODOO / SKILLSET' /tmp/cockpit.html
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/health.json').read_text())
+          assert data['status'] == 'ok', data
+          assert data['trust_model'] == 'fail-closed', data
+          assert data['service'] == 'voodoo-skillset', data
+          PY
