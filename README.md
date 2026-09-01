@@ -6,7 +6,7 @@
   <a href="https://github.com/eimyroot/VOODOO-SKILLSET/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/eimyroot/VOODOO-SKILLSET/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white">
   <img alt="Trust model" src="https://img.shields.io/badge/trust-fail--closed-b8ff5a?labelColor=0d1117">
-  <img alt="version" src="https://img.shields.io/badge/version-0.7.0-6be7ff?labelColor=0d1117">
+  <img alt="version" src="https://img.shields.io/badge/version-0.7.1-6be7ff?labelColor=0d1117">
 </p>
 
 # VOODOO-SKILLSET
