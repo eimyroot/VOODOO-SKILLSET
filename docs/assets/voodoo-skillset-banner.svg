@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-labelledby="title desc">
+  <title id="title">VOODOO-SKILLSET — governed AI orchestration control plane</title>
+  <desc id="desc">Dark technical banner showing intent, routing, governed execution, verification and evidence flowing through the VOODOO-SKILLSET control plane.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#05070a"/>
+      <stop offset="0.55" stop-color="#0b1118"/>
+      <stop offset="1" stop-color="#111821"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="72%" cy="18%" r="62%">
+      <stop offset="0" stop-color="#6be7ff" stop-opacity="0.14"/>
+      <stop offset="0.45" stop-color="#b8ff5a" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#26313e" stroke-opacity="0.32" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="520" rx="28" fill="url(#bg)"/>
+  <rect width="1600" height="520" rx="28" fill="url(#glow)"/>
+  <rect width="1600" height="520" rx="28" fill="url(#grid)"/>
+  <rect x="1" y="1" width="1598" height="518" rx="27" fill="none" stroke="#26313e"/>
+
+  <g transform="translate(94 88)">
+    <polygon points="62,0 124,24 108,100 62,124 16,100 0,24" fill="#0d141c" stroke="#394756" stroke-width="2"/>
+    <polygon points="62,15 105,32 94,89 62,108 30,89 19,32" fill="none" stroke="#b8ff5a" stroke-opacity="0.58" stroke-width="2"/>
+    <path d="M40 37 L62 82 L84 37" fill="none" stroke="#b8ff5a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="62" cy="62" r="49" fill="#b8ff5a" opacity="0.08" filter="url(#shadow)"/>
+  </g>
+
+  <text x="250" y="122" fill="#7f8d9c" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="18" letter-spacing="5">GOVERNED AI OPERATIONS</text>
+  <text x="250" y="188" fill="#f4f7fa" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="66" font-weight="800" letter-spacing="-2">VOODOO-SKILLSET</text>
+  <text x="252" y="232" fill="#a6b2bf" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="24">Capability routing · governed execution · independent verification · evidence</text>
+
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15">
+    <g transform="translate(94 324)">
+      <rect width="210" height="78" rx="14" fill="#0b1016" stroke="#2b3744"/>
+      <text x="20" y="31" fill="#6be7ff" letter-spacing="2">01 / INTENT</text>
+      <text x="20" y="55" fill="#dce4ec">compile mission</text>
+    </g>
+    <path d="M304 363H354" stroke="#41505f" stroke-width="2"/>
+    <circle cx="329" cy="363" r="4" fill="#6be7ff"/>
+
+    <g transform="translate(354 324)">
+      <rect width="210" height="78" rx="14" fill="#0b1016" stroke="#2b3744"/>
+      <text x="20" y="31" fill="#6be7ff" letter-spacing="2">02 / ROUTE</text>
+      <text x="20" y="55" fill="#dce4ec">select capability</text>
+    </g>
+    <path d="M564 363H614" stroke="#41505f" stroke-width="2"/>
+    <circle cx="589" cy="363" r="4" fill="#b8ff5a"/>
+
+    <g transform="translate(614 324)">
+      <rect width="210" height="78" rx="14" fill="#0d1515" stroke="#415533"/>
+      <text x="20" y="31" fill="#b8ff5a" letter-spacing="2">03 / GOVERN</text>
+      <text x="20" y="55" fill="#e7f3dd">authority gates</text>
+    </g>
+    <path d="M824 363H874" stroke="#41505f" stroke-width="2"/>
+    <circle cx="849" cy="363" r="4" fill="#b8ff5a"/>
+
+    <g transform="translate(874 324)">
+      <rect width="210" height="78" rx="14" fill="#0b1016" stroke="#2b3744"/>
+      <text x="20" y="31" fill="#ffbf5f" letter-spacing="2">04 / EXECUTE</text>
+      <text x="20" y="55" fill="#dce4ec">isolated compute</text>
+    </g>
+    <path d="M1084 363H1134" stroke="#41505f" stroke-width="2"/>
+    <circle cx="1109" cy="363" r="4" fill="#ffbf5f"/>
+
+    <g transform="translate(1134 324)">
+      <rect width="210" height="78" rx="14" fill="#0b1016" stroke="#2b3744"/>
+      <text x="20" y="31" fill="#8dff9a" letter-spacing="2">05 / VERIFY</text>
+      <text x="20" y="55" fill="#dce4ec">prove + receipt</text>
+    </g>
+  </g>
+
+  <g transform="translate(1385 87)" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+    <circle cx="7" cy="7" r="7" fill="#b8ff5a"/>
+    <text x="24" y="12" fill="#9aa8b5" letter-spacing="2">FAIL-CLOSED</text>
+  </g>
+  <text x="94" y="462" fill="#647281" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="14" letter-spacing="2">PROJECT IDENTITY ≠ EXECUTION AUTHORITY · UNKNOWN ≠ PASS · RECEIPT ≠ INDEPENDENT VERIFICATION</text>
+</svg>
