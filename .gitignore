@@ -1,9 +1,37 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
+venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+
+# Runtime / evidence state
 evidence/*.json
 !evidence/.gitkeep
 evidence/runs.jsonl
+*.sqlite
+*.sqlite3
+*.db
+
+# Local configuration / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Tooling / platform
+.vercel/
+node_modules/
 *.tmp
 .DS_Store
+.idea/
+.vscode/
