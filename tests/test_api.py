@@ -48,7 +48,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         data = json.loads(body)
         self.assertEqual(data["trust_model"], "fail-closed")
-        self.assertEqual(data["version"], "0.7.0")
+        self.assertEqual(data["version"], "0.7.1")
         self.assertEqual(data["fleet"], "CONFIGURED")
         self.assertEqual(data["fleet_backend"], "sqlite-durable-reference")
 
