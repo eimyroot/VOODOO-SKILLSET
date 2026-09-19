@@ -1,0 +1,43 @@
+PROPRIETARY DEVELOPMENT LICENSE
+Version 1.0 — 2026
+
+Copyright (c) 2026 Lucie Rambousková
+All rights reserved.
+
+1. OWNERSHIP
+
+Except for third-party material that is clearly identified as such, all original source code, object code, documentation, designs, assets, specifications, data structures, workflows, prompts, configuration, and other material contained in this repository (collectively, the "Software") are proprietary to the copyright holder.
+
+2. NO LICENSE GRANTED
+
+This repository is not open source. Publication, availability, access, viewing, or possession of the Software does not grant any license or permission to use the Software.
+
+Except where required by applicable law or by rights necessarily granted through the GitHub Terms of Service solely for operation and use of the GitHub service, no person or entity may, without prior written permission from the copyright holder, copy, reproduce, modify, adapt, translate, create derivative works from, distribute, publish, sublicense, sell, lease, commercially exploit, incorporate into another product or service, or otherwise use any part of the Software.
+
+This restriction also applies to using the Software or substantial portions of it for dataset creation, model training, machine-learning training, automated code generation systems, or similar computational reuse, except to the extent such rights are independently granted by applicable law or binding platform terms.
+
+3. DEVELOPMENT-STAGE STATUS
+
+The Software is under active development and is provided under an all-rights-reserved proprietary regime until the copyright holder decides otherwise.
+
+The copyright holder may replace this license or relicense some or all of the Software at any time by publishing an explicit replacement license. Until such replacement is published, this license remains in effect. A later license change does not retroactively grant rights to earlier use unless the replacement license expressly states otherwise.
+
+4. CONTRIBUTIONS
+
+No external contribution transfers ownership of intellectual property to the copyright holder merely by being submitted to this repository. Contributions should not be submitted unless they are covered by a separate written contributor agreement acceptable to the copyright holder. The copyright holder may reject or remove contributions that are not so covered.
+
+5. THIRD-PARTY MATERIAL
+
+Third-party software, libraries, assets, or other materials included in or referenced by this repository remain subject to their respective licenses and notices. Nothing in this license expands or restricts rights granted by those third-party licenses.
+
+6. NO TRADEMARK OR PATENT RIGHTS
+
+No trademark, trade name, logo, patent, or other intellectual-property right is granted under this license except as expressly stated in a separate written agreement signed by the copyright holder.
+
+7. DISCLAIMER
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS" AND WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM OR RELATING TO THE SOFTWARE OR ITS USE.
+
+8. PERMISSION REQUESTS
+
+Any permission, commercial license, partnership, redistribution right, or other authorization must be granted in writing by the copyright holder.
