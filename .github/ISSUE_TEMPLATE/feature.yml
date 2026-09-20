@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a focused improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the bounded behavior and authority implications.
+    validations:
+      required: true
+  - type: textarea
+    id: governance
+    attributes:
+      label: Governance, authority, or evidence considerations
